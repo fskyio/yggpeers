@@ -1,0 +1,285 @@
+{{define "stats.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Yggdrasil Peers - Stats</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+	<link rel="manifest" href="/static/site.webmanifest">
+</head>
+<body>
+	<header class="site-header">
+		<div class="site-header-inner">
+			<nav>
+				<a href="/">peers</a>
+				<a href="/stats">stats</a>
+				<a href="/map">map</a>
+				<a href="/peers.json">json</a>
+				<a href="/peers.csv">csv</a>
+			</nav>
+			<h1>Yggdrasil Peers Stats</h1>
+		</div>
+	</header>
+	<main class="stats-page">
+
+		<div class="stats-row">
+			<section class="stat-card">
+				<h2>Overview</h2>
+				<table>
+					<tr><td>Total peers</td><td>{{.TotalPeers}}</td></tr>
+					<tr class="up"><td>Online</td><td>{{.OnlinePeers}} ({{pct .OnlinePct}}%)</td></tr>
+					<tr class="down"><td>Offline</td><td>{{.OfflinePeers}}</td></tr>
+					<tr><td>Avg. 7d uptime</td><td>{{optpct .AvgUptimePct}}</td></tr>
+				</table>
+			</section>
+			<section class="stat-card chart-card">
+				<h2>Online vs Offline</h2>
+				<div class="pie-wrap"><canvas id="onlineOfflineChart"></canvas></div>
+			</section>
+		</div>
+
+		<div class="stats-row">
+			<section class="stat-card chart-card chart-tall">
+				<h2>Peers Over Time (7 days)</h2>
+				<canvas id="timelineChart"></canvas>
+			</section>
+		</div>
+
+		<div class="stats-row">
+			<section class="stat-card">
+				<h2>Top Countries</h2>
+				<div class="table-scroll">
+					<table>
+						<tr class="table-head"><td></td><td>peers</td><td>online</td><td>online %</td><td>7d uptime</td></tr>
+						{{range .TopCountries}}
+						<tr>
+							<td class="country-name">{{.Name}}</td>
+							<td>{{.Count}}</td>
+							<td class="up">{{.OnlineCount}}</td>
+							<td class="muted">{{pct .OnlinePct}}%</td>
+							<td class="muted">{{optpct .AvgUptime}}</td>
+						</tr>
+						{{end}}
+					</table>
+				</div>
+			</section>
+			<section class="stat-card chart-card">
+				<h2>Peers by Country</h2>
+				<canvas id="countryChart"></canvas>
+			</section>
+		</div>
+
+		<div class="stats-row">
+			<section class="stat-card">
+				<h2>Protocols</h2>
+				<div class="table-scroll">
+					<table>
+						<tr class="table-head"><td></td><td>peers</td><td>online</td><td>online %</td><td>share</td></tr>
+						{{range .Protocols}}
+						<tr>
+							<td>{{.Name}}</td>
+							<td>{{.Count}}</td>
+							<td class="up">{{.OnlineCount}}</td>
+							<td class="muted">{{pct .OnlinePct}}%</td>
+							<td class="muted">{{pct .Percent}}%</td>
+						</tr>
+						{{end}}
+					</table>
+				</div>
+			</section>
+			<section class="stat-card chart-card">
+				<h2>Protocol Share</h2>
+				<div class="pie-wrap"><canvas id="protoChart"></canvas></div>
+			</section>
+		</div>
+
+		<div class="stats-row">
+			<section class="stat-card chart-card">
+				<h2>Protocols by Country</h2>
+				<canvas id="countryProtoChart"></canvas>
+			</section>
+		</div>
+
+	</main>
+
+	<footer class="site-footer">
+		<div class="site-footer-inner">
+			Data from <a href="https://github.com/yggdrasil-network/public-peers">yggdrasil-network/public-peers</a> &middot;
+			<a href="https://foundry.fsky.io/fsky/yggpeers">Source code</a>
+		</div>
+	</footer>
+
+	<script src="/static/chart.min.js"></script>
+	<script>
+	(function() {
+		var muted = '#777';
+		var onlineColor = '#2a7d2a';
+		var offlineColor = '#bbb';
+		var gridColor = '#eee';
+
+		Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
+		Chart.defaults.font.size = 12;
+		Chart.defaults.color = muted;
+
+		// --- Online / Offline pie ---
+		var onlineCount = {{.OnlinePeers}};
+		var offlineCount = {{.OfflinePeers}};
+		if (onlineCount + offlineCount > 0) {
+			new Chart(document.getElementById('onlineOfflineChart'), {
+				type: 'doughnut',
+				data: {
+					labels: ['Online', 'Offline'],
+					datasets: [{
+						data: [onlineCount, offlineCount],
+						backgroundColor: [onlineColor, offlineColor],
+						borderWidth: 1,
+						borderColor: '#fff'
+					}]
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: true,
+					plugins: {
+						legend: { position: 'bottom' }
+					}
+				}
+			});
+		}
+
+		// --- Timeline chart ---
+		var timeline = {{json .DailyTimeline}};
+		if (timeline && timeline.length > 0) {
+			new Chart(document.getElementById('timelineChart'), {
+				type: 'line',
+				data: {
+					labels: timeline.map(function(d) { return d.Date; }),
+					datasets: [
+						{
+							label: 'Total peers',
+							data: timeline.map(function(d) { return d.TotalPeers; }),
+							borderColor: '#333',
+							backgroundColor: 'rgba(51,51,51,0.08)',
+							fill: true,
+							tension: 0.3,
+							pointRadius: 3
+						},
+						{
+							label: 'Online',
+							data: timeline.map(function(d) { return d.OnlinePeers; }),
+							borderColor: onlineColor,
+							backgroundColor: 'rgba(42,125,42,0.08)',
+							fill: true,
+							tension: 0.3,
+							pointRadius: 3
+						}
+					]
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: false,
+					plugins: { legend: { position: 'bottom' } },
+					scales: {
+						y: { beginAtZero: true, grid: { color: gridColor } },
+						x: { grid: { display: false } }
+					}
+				}
+			});
+		}
+
+		// --- Top countries bar chart ---
+		var countries = {{json .TopCountries}};
+		if (countries && countries.length > 0) {
+			new Chart(document.getElementById('countryChart'), {
+				type: 'bar',
+				data: {
+					labels: countries.map(function(c) { return c.Name; }),
+					datasets: [
+						{
+							label: 'Online',
+							data: countries.map(function(c) { return c.OnlineCount; }),
+							backgroundColor: onlineColor
+						},
+						{
+							label: 'Offline',
+							data: countries.map(function(c) { return c.Count - c.OnlineCount; }),
+							backgroundColor: offlineColor
+						}
+					]
+				},
+				options: {
+					responsive: true,
+					indexAxis: 'y',
+					plugins: { legend: { position: 'bottom' } },
+					scales: {
+						x: { stacked: true, beginAtZero: true, grid: { color: gridColor } },
+						y: { stacked: true, grid: { display: false } }
+					}
+				}
+			});
+		}
+
+		// --- Protocol pie chart ---
+		var protocols = {{json .Protocols}};
+		if (protocols && protocols.length > 0) {
+			var protoColors = ['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f','#edc948','#b07aa1','#ff9da7','#9c755f','#bab0ac'];
+			new Chart(document.getElementById('protoChart'), {
+				type: 'doughnut',
+				data: {
+					labels: protocols.map(function(p) { return p.Name; }),
+					datasets: [{
+						data: protocols.map(function(p) { return p.Count; }),
+						backgroundColor: protoColors.slice(0, protocols.length),
+						borderWidth: 1,
+						borderColor: '#fff'
+					}]
+				},
+				options: {
+					responsive: true,
+					maintainAspectRatio: true,
+					plugins: {
+						legend: { position: 'bottom' }
+					}
+				}
+			});
+		}
+
+		// --- Country protocol breakdown ---
+		var cpData = {{json .CountryProtocols}};
+		if (cpData && cpData.length > 0) {
+			var allProtos = {};
+			cpData.forEach(function(c) {
+				Object.keys(c.Protocols).forEach(function(p) { allProtos[p] = true; });
+			});
+			var protoNames = Object.keys(allProtos).sort();
+			var colors = ['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f','#edc948','#b07aa1','#ff9da7','#9c755f','#bab0ac'];
+
+			new Chart(document.getElementById('countryProtoChart'), {
+				type: 'bar',
+				data: {
+					labels: cpData.map(function(c) { return c.Country; }),
+					datasets: protoNames.map(function(proto, i) {
+						return {
+							label: proto,
+							data: cpData.map(function(c) { return c.Protocols[proto] || 0; }),
+							backgroundColor: colors[i % colors.length]
+						};
+					})
+				},
+				options: {
+					responsive: true,
+					plugins: { legend: { position: 'bottom' } },
+					scales: {
+						x: { stacked: true, grid: { display: false } },
+						y: { stacked: true, beginAtZero: true, grid: { color: gridColor } }
+					}
+				}
+			});
+		}
+	})();
+	</script>
+</body>
+</html>
+{{end}}

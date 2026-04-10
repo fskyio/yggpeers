@@ -1,0 +1,15 @@
+[Container]
+AutoUpdate=registry
+ContainerName=yggpeers
+DropCapability=ALL
+EnvironmentFile=.env
+Image=foundry.fsky.io/fsky/yggpeers:latest
+NoNewPrivileges=true
+PublishPort=8080:8080
+Volume=yggpeers.volume:/data
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target default.target

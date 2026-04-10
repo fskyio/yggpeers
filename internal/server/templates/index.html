@@ -1,0 +1,88 @@
+{{define "index.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Yggdrasil Public Peers</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+	<link rel="manifest" href="/static/site.webmanifest">
+</head>
+<body>
+	<header class="site-header">
+		<div class="site-header-inner">
+			<nav>
+				<a href="/">peers</a>
+				<a href="/stats">stats</a>
+				<a href="/map">map</a>
+				<a href="/peers.json">json</a>
+				<a href="/peers.csv">csv</a>
+			</nav>
+			<h1>Yggdrasil Public Peers</h1>
+		</div>
+	</header>
+	<main>
+		<div class="info-box">
+			<h3>About</h3>
+			<p>This site tracks the reachability of public peers for the <a href="https://yggdrasil-network.github.io/">Yggdrasil network</a>, an encrypted IPv6 overlay network. Peers are fetched from the <a href="https://github.com/yggdrasil-network/public-peers">public-peers</a> repository and checked every few minutes.</p>
+		</div>
+		<div class="info-box">
+			<h3>Tips for choosing peers</h3>
+			<p>Yggdrasil has no concept of "bootstrap nodes". Peer connections are virtual wires used for traffic routing and will remain active once brought up. For the benefit of the wider network:</p>
+			<ul>
+				<li>Select a small number of <strong>nearby</strong> peers with good uptime, preferably inside your own country or neighbouring countries only.</li>
+				<li><strong>Avoid</strong> selecting peers that are high latency, i.e. because they are geographically far away from your node.</li>
+				<li>Do not add large numbers of peers from the list.</li>
+				<li>There is no benefit from adding the same peer multiple times using different protocols.</li>
+			</ul>
+		</div>
+		<div class="col-headers">
+			<span></span>
+			<span>status</span>
+			<span>7d uptime</span>
+		</div>
+		{{range .Countries}}
+		<section>
+			<h2>{{.Name}} <span class="count">({{len .Peers}})</span></h2>
+			{{range .Peers}}
+			<div class="peer {{if .IsUp}}up{{else}}down{{end}}">
+				<span class="uri">{{.URI}}</span>
+				<span class="status">{{status .}}</span>
+				<span class="uptime">{{uptime .UptimePct}}</span>
+			</div>
+			{{end}}
+		</section>
+		{{end}}
+		{{if .Networks}}
+		<div class="section-divider">Overlay Networks</div>
+		{{range .Networks}}
+		<section>
+			<h2>{{.Name}} <span class="count">({{len .Peers}})</span></h2>
+			{{range .Peers}}
+			<div class="peer">
+				<span class="uri">{{.URI}}</span>
+				{{if $.CheckDarknet}}
+				<span class="status">{{status .}}</span>
+				<span class="uptime">{{uptime .UptimePct}}</span>
+				{{else}}
+				<span class="status"></span>
+				<span class="uptime"></span>
+				{{end}}
+			</div>
+			{{end}}
+		</section>
+		{{end}}
+		{{end}}
+	</main>
+	<footer class="site-footer">
+		<div class="site-footer-inner">
+			Updated {{.UpdatedAt.Format "2006-01-02 15:04:05 UTC"}} &middot;
+			Data from <a href="https://github.com/yggdrasil-network/public-peers">yggdrasil-network/public-peers</a> &middot;
+			<a href="https://foundry.fsky.io/fsky/yggpeers">Source code</a>
+		</div>
+	</footer>
+</body>
+</html>
+{{end}}

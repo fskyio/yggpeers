@@ -1,0 +1,382 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+	--bg: #fff;
+	--fg: #111;
+	--muted: #777;
+	--online: #2a7d2a;
+	--offline: #999;
+	--border: #ddd;
+}
+
+body {
+	font-family: sans-serif, system-ui;
+	background: var(--bg);
+	color: var(--fg);
+	font-size: 15px;
+	line-height: 1.6;
+}
+
+a { color: inherit; }
+
+.site-header {
+	border-bottom: 1px solid var(--border);
+}
+
+.site-header-inner {
+	max-width: 960px;
+	margin: 0 auto;
+	padding: 1.5rem 2rem 0.75rem;
+}
+
+header h1 {
+	font-size: 1.2rem;
+	font-weight: bold;
+	margin-top: 0.25rem;
+}
+
+nav {
+	display: flex;
+	gap: 1.25rem;
+}
+
+nav a {
+	color: var(--muted);
+	text-decoration: none;
+	font-size: 0.85rem;
+}
+
+nav a:hover { color: var(--fg); }
+
+main {
+	padding: 1rem 2rem 2rem;
+	max-width: 960px;
+	margin: 0 auto;
+}
+
+
+.col-headers {
+	display: grid;
+	grid-template-columns: 1fr 160px 100px;
+	color: var(--muted);
+	font-size: 0.8rem;
+	font-weight: bold;
+	padding: 0.25rem 0;
+	border-bottom: 1px solid var(--border);
+	margin-bottom: 0.5rem;
+}
+
+.col-headers span:nth-child(2),
+.col-headers span:nth-child(3) {
+	text-align: right;
+}
+
+section { margin-top: 1.5rem; }
+
+section h2 {
+	font-size: 0.95rem;
+	font-weight: bold;
+	margin-bottom: 0.25rem;
+	text-transform: capitalize;
+}
+
+section h2 .count {
+	font-weight: normal;
+	color: var(--muted);
+}
+
+.peer {
+	display: grid;
+	grid-template-columns: 1fr 160px 100px;
+	padding: 0.15rem 0;
+	font-size: 0.9rem;
+}
+
+.peer .uri {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-family: 'Courier New', Courier, monospace;
+	font-size: 0.85rem;
+}
+
+.peer .status,
+.peer .uptime {
+	text-align: right;
+}
+
+.peer.up .status,
+.peer.up .uptime {
+	color: var(--online);
+}
+
+.peer.down .status,
+.peer.down .uptime {
+	color: var(--offline);
+}
+
+.site-footer {
+	border-top: 1px solid var(--border);
+}
+
+.site-footer-inner {
+	max-width: 960px;
+	margin: 0 auto;
+	padding: 1.5rem 2rem;
+	color: var(--muted);
+	font-size: 0.8rem;
+}
+
+.site-footer a { color: var(--muted); }
+
+/* Info boxes */
+.info-box {
+	margin: 1.25rem 0 0.5rem;
+	padding: 1rem 1.25rem;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	font-size: 0.85rem;
+	line-height: 1.7;
+}
+
+.info-box h3 {
+	font-size: 0.85rem;
+	font-weight: 600;
+	color: var(--muted);
+	text-transform: uppercase;
+	letter-spacing: 0.03em;
+	margin-bottom: 0.5rem;
+}
+
+.info-box p {
+	margin-bottom: 0.5rem;
+}
+
+.info-box ul {
+	margin: 0.5rem 0 0 1.25rem;
+}
+
+.info-box li {
+	margin-bottom: 0.2rem;
+}
+
+.info-box a {
+	color: var(--muted);
+	text-decoration: underline;
+}
+
+.info-box a:hover {
+	color: var(--fg);
+}
+
+/* Mobile */
+@media (max-width: 700px) {
+	.site-header-inner { padding: 1rem 1rem 0.5rem; }
+	main { padding: 0.75rem 1rem 1.5rem; }
+	.site-footer-inner { padding: 1rem; }
+
+	.col-headers { display: none; }
+
+	.peer {
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+		padding: 0.4rem 0;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.peer .uri {
+		white-space: normal;
+		word-break: break-all;
+		font-size: 0.85rem;
+	}
+
+	.peer .status,
+	.peer .uptime {
+		text-align: left;
+		font-size: 0.8rem;
+	}
+
+	.peer .status::before { content: "status: "; color: var(--muted); }
+	.peer .uptime::before { content: "7d uptime: "; color: var(--muted); }
+
+	.stats-row {
+		grid-template-columns: 1fr;
+	}
+
+	.stats-page {
+		gap: 1rem;
+	}
+
+	.stat-card {
+		padding: 0.75rem 1rem;
+	}
+
+	.chart-tall {
+		min-height: 300px;
+	}
+
+	.chart-tall canvas {
+		height: 260px !important;
+	}
+
+	.info-box { font-size: 0.8rem; }
+}
+
+/* Section divider */
+.section-divider {
+	margin-top: 2.5rem;
+	padding: 0.5rem 0;
+	border-bottom: 1px solid var(--border);
+	color: var(--muted);
+	font-size: 0.85rem;
+	font-weight: bold;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+}
+
+/* Stats page */
+.stats-page {
+	max-width: 1200px;
+	margin: 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 1.5rem;
+}
+
+.stats-row {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 1.5rem;
+	align-items: start;
+}
+
+.stats-row:has(> :only-child) {
+	grid-template-columns: 1fr;
+}
+
+.stat-card {
+	margin-top: 0;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 1rem 1.25rem;
+	min-width: 0;
+}
+
+.stat-card h2 {
+	font-size: 0.85rem;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--muted);
+	margin-bottom: 0.75rem;
+}
+
+.table-scroll {
+	overflow-x: auto;
+}
+
+.stat-card table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.stat-card td {
+	padding: 0.25rem 0.5rem;
+	font-size: 0.9rem;
+	white-space: nowrap;
+}
+
+.stat-card td:not(:first-child) {
+	text-align: right;
+}
+
+.stat-card .table-head td {
+	color: var(--muted);
+	font-size: 0.8rem;
+	border-bottom: 1px solid var(--border);
+	padding-bottom: 0.35rem;
+}
+
+.stat-card .country-name {
+	text-transform: capitalize;
+}
+
+.stat-card .up td,
+.stat-card td.up {
+	color: var(--online);
+}
+
+.stat-card .down td {
+	color: var(--offline);
+}
+
+.stat-card td.muted {
+	color: var(--muted);
+}
+
+.chart-card canvas {
+	width: 100% !important;
+}
+
+.chart-tall {
+	min-height: 400px;
+}
+
+.chart-tall canvas {
+	height: 360px !important;
+}
+
+.pie-wrap {
+	max-width: 280px;
+	margin: 0 auto;
+}
+
+/* Map page */
+main.map-page {
+	max-width: 100%;
+	padding: 0;
+	position: relative;
+}
+
+#map {
+	width: 100%;
+	height: calc(100vh - 80px);
+}
+
+#legend {
+	position: absolute;
+	bottom: 2rem;
+	right: 1rem;
+	background: rgba(255, 255, 255, 0.92);
+	padding: 0.75rem 1rem;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	font-size: 0.8rem;
+	z-index: 1000;
+	line-height: 1.8;
+}
+
+#legend strong {
+	display: block;
+	margin-bottom: 0.25rem;
+}
+
+#legend div {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.swatch {
+	display: inline-block;
+	width: 14px;
+	height: 14px;
+	border: 1px solid #bbb;
+}
+
+.maplibregl-popup-content {
+	font-family: inherit;
+	font-size: 0.85rem;
+	line-height: 1.6;
+	padding: 0.5rem 0.75rem;
+}
