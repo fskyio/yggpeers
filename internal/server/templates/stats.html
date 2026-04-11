@@ -42,9 +42,9 @@
 		</div>
 
 		<div class="stats-row">
-			<section class="stat-card chart-card chart-tall">
+			<section class="stat-card chart-card">
 				<h2>Peers Over Time (7 days)</h2>
-				<canvas id="timelineChart"></canvas>
+				<div class="chart-wrap chart-wrap-timeline"><canvas id="timelineChart"></canvas></div>
 			</section>
 		</div>
 
@@ -53,13 +53,13 @@
 				<h2>Top Countries</h2>
 				<div class="table-scroll">
 					<table>
-						<tr class="table-head"><td></td><td>peers</td><td>online</td><td>online %</td><td>7d uptime</td></tr>
+						<tr class="table-head"><td></td><td>peers</td><td>online</td><td class="hide-mobile">online %</td><td>7d uptime</td></tr>
 						{{range .TopCountries}}
 						<tr>
 							<td class="country-name">{{.Name}}</td>
 							<td>{{.Count}}</td>
 							<td class="up">{{.OnlineCount}}</td>
-							<td class="muted">{{pct .OnlinePct}}%</td>
+							<td class="muted hide-mobile">{{pct .OnlinePct}}%</td>
 							<td class="muted">{{optpct .AvgUptime}}</td>
 						</tr>
 						{{end}}
@@ -68,7 +68,7 @@
 			</section>
 			<section class="stat-card chart-card">
 				<h2>Peers by Country</h2>
-				<canvas id="countryChart"></canvas>
+				<div class="chart-wrap chart-wrap-country"><canvas id="countryChart"></canvas></div>
 			</section>
 		</div>
 
@@ -77,13 +77,13 @@
 				<h2>Protocols</h2>
 				<div class="table-scroll">
 					<table>
-						<tr class="table-head"><td></td><td>peers</td><td>online</td><td>online %</td><td>share</td></tr>
+						<tr class="table-head"><td></td><td>peers</td><td>online</td><td class="hide-mobile">online %</td><td>share</td></tr>
 						{{range .Protocols}}
 						<tr>
 							<td>{{.Name}}</td>
 							<td>{{.Count}}</td>
 							<td class="up">{{.OnlineCount}}</td>
-							<td class="muted">{{pct .OnlinePct}}%</td>
+							<td class="muted hide-mobile">{{pct .OnlinePct}}%</td>
 							<td class="muted">{{pct .Percent}}%</td>
 						</tr>
 						{{end}}
@@ -99,7 +99,7 @@
 		<div class="stats-row">
 			<section class="stat-card chart-card">
 				<h2>Protocols by Country</h2>
-				<canvas id="countryProtoChart"></canvas>
+				<div class="chart-wrap chart-wrap-countryproto"><canvas id="countryProtoChart"></canvas></div>
 			</section>
 		</div>
 
@@ -119,10 +119,16 @@
 		var onlineColor = '#2a7d2a';
 		var offlineColor = '#bbb';
 		var gridColor = '#eee';
+		var isMobile = window.innerWidth <= 700;
 
 		Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
-		Chart.defaults.font.size = 12;
+		Chart.defaults.font.size = isMobile ? 10 : 12;
 		Chart.defaults.color = muted;
+
+		var legendOpts = {
+			position: 'bottom',
+			labels: isMobile ? { boxWidth: 10, padding: 8, font: { size: 10 } } : {}
+		};
 
 		// --- Online / Offline pie ---
 		var onlineCount = {{.OnlinePeers}};
@@ -142,9 +148,7 @@
 				options: {
 					responsive: true,
 					maintainAspectRatio: true,
-					plugins: {
-						legend: { position: 'bottom' }
-					}
+					plugins: { legend: legendOpts }
 				}
 			});
 		}
@@ -164,7 +168,8 @@
 							backgroundColor: 'rgba(51,51,51,0.08)',
 							fill: true,
 							tension: 0.3,
-							pointRadius: 3
+							pointRadius: isMobile ? 2 : 3,
+							borderWidth: isMobile ? 1.5 : 2
 						},
 						{
 							label: 'Online',
@@ -173,25 +178,30 @@
 							backgroundColor: 'rgba(42,125,42,0.08)',
 							fill: true,
 							tension: 0.3,
-							pointRadius: 3
+							pointRadius: isMobile ? 2 : 3,
+							borderWidth: isMobile ? 1.5 : 2
 						}
 					]
 				},
 				options: {
 					responsive: true,
 					maintainAspectRatio: false,
-					plugins: { legend: { position: 'bottom' } },
+					plugins: { legend: legendOpts },
 					scales: {
 						y: { beginAtZero: true, grid: { color: gridColor } },
-						x: { grid: { display: false } }
+						x: { grid: { display: false }, ticks: isMobile ? { maxRotation: 0, autoSkip: true, maxTicksLimit: 5 } : {} }
 					}
 				}
 			});
 		}
 
-		// --- Top countries bar chart ---
+		// --- Top countries bar chart (horizontal on all sizes) ---
 		var countries = {{json .TopCountries}};
 		if (countries && countries.length > 0) {
+			var countryWrap = document.querySelector('.chart-wrap-country');
+			// Scale wrapper height to number of countries so bars aren't squished
+			var countryHeight = Math.max(300, countries.length * 28);
+			countryWrap.style.height = countryHeight + 'px';
 			new Chart(document.getElementById('countryChart'), {
 				type: 'bar',
 				data: {
@@ -211,11 +221,16 @@
 				},
 				options: {
 					responsive: true,
+					maintainAspectRatio: false,
 					indexAxis: 'y',
-					plugins: { legend: { position: 'bottom' } },
+					plugins: { legend: legendOpts },
 					scales: {
 						x: { stacked: true, beginAtZero: true, grid: { color: gridColor } },
-						y: { stacked: true, grid: { display: false } }
+						y: {
+							stacked: true,
+							grid: { display: false },
+							ticks: isMobile ? { font: { size: 9 } } : {}
+						}
 					}
 				}
 			});
@@ -239,14 +254,12 @@
 				options: {
 					responsive: true,
 					maintainAspectRatio: true,
-					plugins: {
-						legend: { position: 'bottom' }
-					}
+					plugins: { legend: legendOpts }
 				}
 			});
 		}
 
-		// --- Country protocol breakdown ---
+		// --- Country protocol breakdown (horizontal on mobile) ---
 		var cpData = {{json .CountryProtocols}};
 		if (cpData && cpData.length > 0) {
 			var allProtos = {};
@@ -255,6 +268,11 @@
 			});
 			var protoNames = Object.keys(allProtos).sort();
 			var colors = ['#4e79a7','#f28e2b','#e15759','#76b7b2','#59a14f','#edc948','#b07aa1','#ff9da7','#9c755f','#bab0ac'];
+
+			var cpWrap = document.querySelector('.chart-wrap-countryproto');
+			if (isMobile) {
+				cpWrap.style.height = Math.max(300, cpData.length * 28) + 'px';
+			}
 
 			new Chart(document.getElementById('countryProtoChart'), {
 				type: 'bar',
@@ -270,8 +288,13 @@
 				},
 				options: {
 					responsive: true,
-					plugins: { legend: { position: 'bottom' } },
-					scales: {
+					maintainAspectRatio: false,
+					indexAxis: isMobile ? 'y' : 'x',
+					plugins: { legend: legendOpts },
+					scales: isMobile ? {
+						x: { stacked: true, beginAtZero: true, grid: { color: gridColor } },
+						y: { stacked: true, grid: { display: false }, ticks: { font: { size: 9 } } }
+					} : {
 						x: { stacked: true, grid: { display: false } },
 						y: { stacked: true, beginAtZero: true, grid: { color: gridColor } }
 					}
