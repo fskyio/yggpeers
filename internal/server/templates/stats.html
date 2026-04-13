@@ -115,10 +115,13 @@
 	<script src="/static/chart.min.js"></script>
 	<script>
 	(function() {
-		var muted = '#777';
-		var onlineColor = '#2a7d2a';
-		var offlineColor = '#bbb';
-		var gridColor = '#eee';
+		var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+		var muted = isDark ? '#999' : '#777';
+		var onlineColor = isDark ? '#4caf50' : '#2a7d2a';
+		var offlineColor = isDark ? '#666' : '#bbb';
+		var gridColor = isDark ? '#333' : '#eee';
+		var bgColor = isDark ? '#1a1a1a' : '#fff';
+		var fgColor = isDark ? '#e0e0e0' : '#111';
 		var isMobile = window.innerWidth <= 700;
 
 		Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
@@ -142,7 +145,7 @@
 						data: [onlineCount, offlineCount],
 						backgroundColor: [onlineColor, offlineColor],
 						borderWidth: 1,
-						borderColor: '#fff'
+						borderColor: bgColor
 					}]
 				},
 				options: {
@@ -154,6 +157,8 @@
 		}
 
 		// --- Timeline chart ---
+		var timelineBorderColor = isDark ? 'rgba(224,224,224,0.08)' : 'rgba(51,51,51,0.08)';
+		var timelineOnlineBg = isDark ? 'rgba(76,175,80,0.08)' : 'rgba(42,125,42,0.08)';
 		var timeline = {{json .DailyTimeline}};
 		if (timeline && timeline.length > 0) {
 			new Chart(document.getElementById('timelineChart'), {
@@ -164,8 +169,8 @@
 						{
 							label: 'Total peers',
 							data: timeline.map(function(d) { return d.TotalPeers; }),
-							borderColor: '#333',
-							backgroundColor: 'rgba(51,51,51,0.08)',
+							borderColor: fgColor,
+							backgroundColor: timelineBorderColor,
 							fill: true,
 							tension: 0.3,
 							pointRadius: isMobile ? 2 : 3,
@@ -175,7 +180,7 @@
 							label: 'Online',
 							data: timeline.map(function(d) { return d.OnlinePeers; }),
 							borderColor: onlineColor,
-							backgroundColor: 'rgba(42,125,42,0.08)',
+							backgroundColor: timelineOnlineBg,
 							fill: true,
 							tension: 0.3,
 							pointRadius: isMobile ? 2 : 3,
@@ -248,7 +253,7 @@
 						data: protocols.map(function(p) { return p.Count; }),
 						backgroundColor: protoColors.slice(0, protocols.length),
 						borderWidth: 1,
-						borderColor: '#fff'
+						borderColor: bgColor
 					}]
 				},
 				options: {

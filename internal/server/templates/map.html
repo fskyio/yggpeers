@@ -37,7 +37,13 @@
 			</div>
 		</noscript>
 		<div id="legend">
-			<strong>Peers per country</strong>
+			<div class="legend-header">
+				<strong>Peers per country</strong>
+				<div class="toggle-group">
+					<button class="toggle-btn active" data-mode="total">Total</button>
+					<button class="toggle-btn" data-mode="online">Online</button>
+				</div>
+			</div>
 			<div><span class="swatch" style="background:#c6e9af"></span> 1&ndash;2</div>
 			<div><span class="swatch" style="background:#7dc67d"></span> 3&ndash;4</div>
 			<div><span class="swatch" style="background:#4cb847"></span> 5&ndash;9</div>
@@ -47,6 +53,9 @@
 	</main>
 	<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 	<script>
+		var displayMode = 'total';
+		var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
 		function webglSupported() {
 			try {
 				var canvas = document.createElement('canvas');
@@ -62,6 +71,14 @@
 			document.getElementById('legend').style.display = 'none';
 		}
 
+		var tileSource = isDark ? {
+			tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],
+			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+		} : {
+			tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+		};
+
 		var map = new maplibregl.Map({
 			container: 'map',
 			style: {
@@ -69,9 +86,9 @@
 				sources: {
 					osm: {
 						type: 'raster',
-						tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+						tiles: tileSource.tiles,
 						tileSize: 256,
-						attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+						attribution: tileSource.attribution
 					}
 				},
 				layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
@@ -92,13 +109,28 @@
 			reverseLookup[nameCorrections[k]] = k;
 		}
 
+		var colorScale = isDark
+			? ['#81c784', '#4caf50', '#388e3c', '#2e7d32', '#1b5e20']
+			: ['#c6e9af', '#7dc67d', '#4cb847', '#2d8f2d', '#1a5e1a'];
+
+		// Update legend swatches to match the active color scale
+		(function() {
+			var swatches = document.querySelectorAll('#legend .swatch');
+			colorScale.forEach(function(c, i) { swatches[i].style.background = c; });
+		})();
+
 		function getColor(n) {
-			if (!n || n === 0) return '#eeeeee';
-			if (n < 3)  return '#c6e9af';
-			if (n < 5)  return '#7dc67d';
-			if (n < 10) return '#4cb847';
-			if (n < 20) return '#2d8f2d';
-			return '#1a5e1a';
+			if (!n || n === 0) return 'rgba(0,0,0,0)';
+			if (n < 3)  return colorScale[0];
+			if (n < 5)  return colorScale[1];
+			if (n < 10) return colorScale[2];
+			if (n < 20) return colorScale[3];
+			return colorScale[4];
+		}
+
+		function getColorForMode(info, mode) {
+			var count = mode === 'online' ? info.online : info.total;
+			return getColor(count);
 		}
 
 		function findCount(counts, geoName) {
@@ -126,7 +158,7 @@
 					f.properties.peerCount = info.total;
 					f.properties.onlineCount = info.online;
 					f.properties.avgUptime = info.avgUptime;
-					f.properties.fillColor = getColor(info.total);
+					f.properties.fillColor = getColorForMode(info, displayMode);
 				});
 
 				map.addSource('countries', { type: 'geojson', data: geojson });
@@ -146,7 +178,7 @@
 					type: 'line',
 					source: 'countries',
 					paint: {
-						'line-color': '#888',
+						'line-color': isDark ? '#555' : '#888',
 						'line-width': 0.5
 					}
 				});
@@ -179,6 +211,30 @@
 				map.on('mouseleave', 'countries-fill', function() {
 					map.getCanvas().style.cursor = '';
 					popup.remove();
+				});
+
+				// Toggle button handler
+				document.querySelectorAll('.toggle-btn').forEach(function(btn) {
+					btn.addEventListener('click', function() {
+						var newMode = this.getAttribute('data-mode');
+						displayMode = newMode;
+
+						// Update active state
+						document.querySelectorAll('.toggle-btn').forEach(function(b) {
+							b.classList.remove('active');
+						});
+						this.classList.add('active');
+
+						// Update colors
+						geojson.features.forEach(function(f) {
+							var name = f.properties.name;
+							var info = findCount(counts, name);
+							f.properties.fillColor = getColorForMode(info, displayMode);
+						});
+
+						// Update the source
+						map.getSource('countries').setData(geojson);
+					});
 				});
 			});
 		});
