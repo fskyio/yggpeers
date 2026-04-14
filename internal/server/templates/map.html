@@ -44,11 +44,11 @@
 					<button class="toggle-btn" data-mode="online">Online</button>
 				</div>
 			</div>
-			<div><span class="swatch" style="background:#c6e9af"></span> 1&ndash;2</div>
-			<div><span class="swatch" style="background:#7dc67d"></span> 3&ndash;4</div>
-			<div><span class="swatch" style="background:#4cb847"></span> 5&ndash;9</div>
-			<div><span class="swatch" style="background:#2d8f2d"></span> 10&ndash;19</div>
-			<div><span class="swatch" style="background:#1a5e1a"></span> 20+</div>
+			<div><span class="swatch" style="background:#c2e699"></span> 1&ndash;2</div>
+			<div><span class="swatch" style="background:#78c679"></span> 3&ndash;4</div>
+			<div><span class="swatch" style="background:#31a354"></span> 5&ndash;9</div>
+			<div><span class="swatch" style="background:#006837"></span> 10&ndash;19</div>
+			<div><span class="swatch" style="background:#0c3a24"></span> 20+</div>
 		</div>
 	</main>
 	<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
@@ -72,11 +72,11 @@
 		}
 
 		var tileSource = isDark ? {
-			tiles: ['https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],
+			tiles: ['https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png'],
 			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
 		} : {
-			tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+			tiles: ['https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png'],
+			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
 		};
 
 		var map = new maplibregl.Map({
@@ -109,9 +109,7 @@
 			reverseLookup[nameCorrections[k]] = k;
 		}
 
-		var colorScale = isDark
-			? ['#81c784', '#4caf50', '#388e3c', '#2e7d32', '#1b5e20']
-			: ['#c6e9af', '#7dc67d', '#4cb847', '#2d8f2d', '#1a5e1a'];
+		var colorScale = ['#c2e699', '#78c679', '#31a354', '#006837', '#0c3a24'];
 
 		// Update legend swatches to match the active color scale
 		(function() {
