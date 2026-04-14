@@ -54,7 +54,6 @@
 	<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 	<script>
 		var displayMode = 'total';
-		var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
 		function webglSupported() {
 			try {
@@ -71,14 +70,6 @@
 			document.getElementById('legend').style.display = 'none';
 		}
 
-		var tileSource = isDark ? {
-			tiles: ['https://a.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}.png'],
-			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-		} : {
-			tiles: ['https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png'],
-			attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-		};
-
 		var map = new maplibregl.Map({
 			container: 'map',
 			style: {
@@ -86,9 +77,9 @@
 				sources: {
 					osm: {
 						type: 'raster',
-						tiles: tileSource.tiles,
+						tiles: ['https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png'],
 						tileSize: 256,
-						attribution: tileSource.attribution
+						attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
 					}
 				},
 				layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
@@ -176,7 +167,7 @@
 					type: 'line',
 					source: 'countries',
 					paint: {
-						'line-color': isDark ? '#555' : '#888',
+						'line-color': '#888',
 						'line-width': 0.5
 					}
 				});
