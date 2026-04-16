@@ -3,9 +3,9 @@
 :root {
 	--bg: #fff;
 	--fg: #111;
-	--muted: #777;
-	--online: #2a7d2a;
-	--offline: #999;
+	--muted: #555555;
+	--online: #1a5e1a;
+	--offline: #555555;
 	--border: #ddd;
 }
 
@@ -13,9 +13,9 @@
 	:root {
 		--bg: #1a1a1a;
 		--fg: #e0e0e0;
-		--muted: #999;
-		--online: #4caf50;
-		--offline: #666;
+		--muted: #a8a8a8;
+		--online: #65bb69;
+		--offline: #a8a8a8;
 		--border: #333;
 	}
 
@@ -59,6 +59,19 @@ nav a {
 }
 
 nav a:hover { color: var(--fg); }
+
+.nav-spacer { flex: 1; }
+
+.export-btn {
+	padding: 0.15rem 0.5rem;
+	border: 1px solid var(--border);
+	border-radius: 3px;
+	font-size: 0.75rem;
+}
+
+.export-btn:hover {
+	border-color: var(--muted);
+}
 
 main {
 	padding: 1rem 2rem 2rem;
@@ -394,6 +407,162 @@ section h2 .count {
 @media (min-width: 701px) and (max-width: 900px) {
 	.stats-row {
 		grid-template-columns: 1fr;
+	}
+}
+
+/* API page */
+.api-page {
+	max-width: 860px;
+}
+
+.api-section {
+	margin-top: 2rem;
+}
+
+.api-section h2 {
+	font-size: 0.9rem;
+	font-weight: bold;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: var(--muted);
+	margin-bottom: 0.75rem;
+	padding-bottom: 0.35rem;
+	border-bottom: 1px solid var(--border);
+}
+
+.api-endpoint {
+	display: flex;
+	align-items: baseline;
+	gap: 0.75rem;
+	margin-bottom: 0.5rem;
+}
+
+.api-method {
+	font-size: 0.75rem;
+	font-weight: bold;
+	color: var(--online);
+	font-family: 'Courier New', Courier, monospace;
+}
+
+.api-path {
+	font-family: 'Courier New', Courier, monospace;
+	font-size: 1rem;
+}
+
+.api-desc {
+	font-size: 0.85rem;
+	color: var(--muted);
+	margin-bottom: 0.75rem;
+	line-height: 1.6;
+}
+
+.api-table {
+	width: 100%;
+	border-collapse: collapse;
+	font-size: 0.85rem;
+}
+
+.api-table th {
+	text-align: left;
+	padding: 0.4rem 0.75rem;
+	font-size: 0.8rem;
+	color: var(--muted);
+	border-bottom: 1px solid var(--border);
+}
+
+.api-table td {
+	padding: 0.5rem 0.75rem;
+	vertical-align: top;
+	border-bottom: 1px solid var(--border);
+	line-height: 1.5;
+}
+
+.api-table td:first-child {
+	white-space: nowrap;
+}
+
+.api-table td:nth-child(2) {
+	white-space: nowrap;
+	color: var(--muted);
+}
+
+.api-pre {
+	background: transparent;
+	border: 1px solid var(--border);
+	border-radius: 4px;
+	padding: 1rem 1.25rem;
+	font-family: 'Courier New', Courier, monospace;
+	font-size: 0.8rem;
+	line-height: 1.7;
+	overflow-x: auto;
+	white-space: pre;
+	color: var(--fg);
+}
+
+.api-examples {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.api-example {
+	display: flex;
+	align-items: baseline;
+	gap: 1rem;
+	font-size: 0.85rem;
+}
+
+.example-label {
+	color: var(--muted);
+	min-width: 260px;
+	flex-shrink: 0;
+}
+
+.example-url {
+	font-family: 'Courier New', Courier, monospace;
+	font-size: 0.82rem;
+	color: var(--fg);
+	text-decoration: none;
+	border-bottom: 1px solid var(--border);
+}
+
+.example-url:hover {
+	border-bottom-color: var(--fg);
+}
+
+.api-notes {
+	margin-left: 1.25rem;
+	font-size: 0.85rem;
+	line-height: 1.7;
+	color: var(--muted);
+}
+
+.api-notes a {
+	color: var(--muted);
+	text-decoration: underline;
+}
+
+.api-notes a:hover {
+	color: var(--fg);
+}
+
+code {
+	font-family: 'Courier New', Courier, monospace;
+	font-size: 0.85em;
+}
+
+@media (max-width: 700px) {
+	.api-example {
+		flex-direction: column;
+		gap: 0.15rem;
+	}
+
+	.example-label {
+		min-width: 0;
+	}
+
+	.api-table td:nth-child(2) {
+		display: none;
 	}
 }
 

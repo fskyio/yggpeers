@@ -1,0 +1,195 @@
+{{define "api.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Yggdrasil Peers - API</title>
+	<link rel="stylesheet" href="/static/style.css">
+	<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+	<link rel="manifest" href="/static/site.webmanifest">
+</head>
+<body>
+	<header class="site-header">
+		<div class="site-header-inner">
+			<nav>
+				<a href="/">peers</a>
+				<a href="/stats">stats</a>
+				<a href="/map">map</a>
+				<a href="/api">api</a>
+				<span class="nav-spacer"></span>
+				<a href="/peers.json" class="export-btn">Export as JSON</a>
+				<a href="/peers.csv" class="export-btn">Export as CSV</a>
+			</nav>
+			<h1>API Reference</h1>
+		</div>
+	</header>
+	<main class="api-page">
+
+		<div class="info-box">
+			<h3>Overview</h3>
+			<p>The peers API is a read-only JSON API intended for Yggdrasil software developers and tools that need programmatic access to peer data. It returns the same data shown on the main page, with optional filtering by country, protocol, and status.</p>
+			<p>No authentication is required. All responses are <code>application/json</code>.</p>
+		</div>
+
+		<section class="api-section">
+			<h2>Endpoint</h2>
+			<div class="api-endpoint">
+				<span class="api-method">GET</span>
+				<span class="api-path">/api/v1/peers</span>
+			</div>
+			<p class="api-desc">Returns a list of all known public peers, with optional filtering.</p>
+		</section>
+
+		<section class="api-section">
+			<h2>Query parameters</h2>
+			<p class="api-desc">All parameters are optional and can be combined freely.</p>
+			<table class="api-table">
+				<thead>
+					<tr>
+						<th>Parameter</th>
+						<th>Type</th>
+						<th>Description</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td><code>country</code></td>
+						<td>string</td>
+						<td>Filter by country name or ISO 3166-1 alpha-2 code. Case-insensitive (e.g. <code>germany</code>, <code>United States</code>, <code>de</code>, <code>US</code>).</td>
+					</tr>
+					<tr>
+						<td><code>protocol</code></td>
+						<td>string</td>
+						<td>Filter by protocol. Case-insensitive. One of: <code>tcp</code>, <code>tls</code>, <code>quic</code>, <code>ws</code>, <code>wss</code>, <code>socks</code>, <code>sockstls</code>.</td>
+					</tr>
+					<tr>
+						<td><code>is_up</code></td>
+						<td>boolean</td>
+						<td>Filter by current reachability. <code>true</code> returns only peers that are currently online; <code>false</code> returns only offline peers.</td>
+					</tr>
+					<tr>
+						<td><code>is_network</code></td>
+						<td>boolean</td>
+						<td>Filter by peer type. <code>false</code> returns regular public peers; <code>true</code> returns overlay network peers (e.g. Hyperboria).</td>
+					</tr>
+				</tbody>
+			</table>
+		</section>
+
+		<section class="api-section">
+			<h2>Response format</h2>
+			<p class="api-desc">The response is a JSON object with metadata and a <code>peers</code> array. Counts reflect the filtered result set, not the full database.</p>
+			<pre class="api-pre">{
+  "updated_at":  "2025-01-01T12:00:00Z",  // time this response was generated (UTC)
+  "window_days": 7,                        // uptime window used for uptime_pct
+  "total":       142,                      // total peers in this response
+  "online":      98,                       // peers currently reachable
+  "peers": [
+    {
+      "uri":              "tls://example.com:8001",  // full connection URI
+      "country":          "DE",
+      "protocol":         "tls",
+      "host":             "example.com",
+      "port":             8001,
+      "is_up":            true,            // currently reachable
+      "is_network":       false,           // true for overlay network peers
+      "state_changed_at": "2025-01-01T11:30:00Z",  // last up/down transition (or null)
+      "uptime_pct":       98.21            // 7-day uptime percentage (or null if no data)
+    },
+    ...
+  ]
+}</pre>
+		</section>
+
+		<section class="api-section">
+			<h2>Examples</h2>
+			<div class="api-examples">
+				<div class="api-example">
+					<p class="example-label">All peers (no filter)</p>
+					<a href="/api/v1/peers" class="example-url">/api/v1/peers</a>
+				</div>
+				<div class="api-example">
+					<p class="example-label">Only peers currently online</p>
+					<a href="/api/v1/peers?is_up=true" class="example-url">/api/v1/peers?is_up=true</a>
+				</div>
+				<div class="api-example">
+					<p class="example-label">QUIC peers in Germany</p>
+					<a href="/api/v1/peers?country=germany&protocol=quic" class="example-url">/api/v1/peers?country=germany&protocol=quic</a>
+				</div>
+				<div class="api-example">
+					<p class="example-label">Online TLS peers, excluding overlay networks</p>
+					<a href="/api/v1/peers?protocol=tls&is_up=true&is_network=false" class="example-url">/api/v1/peers?protocol=tls&is_up=true&is_network=false</a>
+				</div>
+			</div>
+		</section>
+
+		<section class="api-section">
+			<h2>Bulk export</h2>
+			<p class="api-desc">If you need a one-off snapshot of all peers without filtering, two export formats are available:</p>
+			<div class="api-examples">
+				<div class="api-example">
+					<p class="example-label">All peers as JSON (same shape as the API, no filters)</p>
+					<a href="/peers.json" class="example-url">/peers.json</a>
+				</div>
+				<div class="api-example">
+					<p class="example-label">All peers as CSV (column headers match JSON field names)</p>
+					<a href="/peers.csv" class="example-url">/peers.csv</a>
+				</div>
+			</div>
+			<p class="api-desc" style="margin-top:0.75rem;">The CSV response includes two response headers carrying the metadata that the JSON envelope provides inline:</p>
+			<table class="api-table">
+				<thead>
+					<tr><th>Header</th><th>Example</th><th>Description</th></tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td><code>X-Updated-At</code></td>
+						<td><code>2025-01-01T12:00:00Z</code></td>
+						<td>Time the response was generated (UTC, RFC 3339).</td>
+					</tr>
+					<tr>
+						<td><code>X-Window-Days</code></td>
+						<td><code>7</code></td>
+						<td>Uptime window used for the <code>uptime_pct</code> column.</td>
+					</tr>
+				</tbody>
+			</table>
+		</section>
+
+		<section class="api-section">
+			<h2>HTTP status codes</h2>
+			<table class="api-table">
+				<thead>
+					<tr><th>Status</th><th>Meaning</th></tr>
+				</thead>
+				<tbody>
+					<tr><td><code>200 OK</code></td><td>Successful response. Body is JSON.</td></tr>
+					<tr><td><code>400 Bad Request</code></td><td>A query parameter has an invalid value. Body is <code>{"error": "..."}</code>.</td></tr>
+					<tr><td><code>500 Internal Server Error</code></td><td>Server-side failure. Body is plain text.</td></tr>
+				</tbody>
+			</table>
+		</section>
+
+		<section class="api-section">
+			<h2>Notes</h2>
+			<ul class="api-notes">
+				<li>Peer reachability is checked every few minutes. Responses are cached for up to 30 seconds, so data may be slightly stale.</li>
+				<li>The <code>uptime_pct</code> field reflects the past <code>window_days</code> days. It is <code>null</code> for peers that were added recently and have not yet accumulated enough check history.</li>
+				<li>Peers listed with <code>is_network: true</code> are hosted inside overlay networks (e.g. accessed via another Yggdrasil node) and may not be reachable from the public internet.</li>
+				<li>Peer data is sourced from the <a href="https://github.com/yggdrasil-network/public-peers">yggdrasil-network/public-peers</a> repository and refreshed periodically.</li>
+				<li>Error responses use the same <code>application/json</code> content type as successful responses, with the shape <code>{"error": "..."}</code>.</li>
+			</ul>
+		</section>
+
+	</main>
+	<footer class="site-footer">
+		<div class="site-footer-inner">
+			Data from <a href="https://github.com/yggdrasil-network/public-peers">yggdrasil-network/public-peers</a> &middot;
+			<a href="https://foundry.fsky.io/fsky/yggpeers">Source code</a>
+		</div>
+	</footer>
+</body>
+</html>
+{{end}}

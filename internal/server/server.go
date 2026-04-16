@@ -10,10 +10,12 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"yggpeers/internal/config"
+	"yggpeers/internal/fetcher"
 	"yggpeers/internal/store"
 )
 
@@ -58,10 +60,25 @@ func (s *Server) routes() {
 	})
 	s.mux.HandleFunc("GET /{$}", s.index)
 	s.mux.HandleFunc("GET /stats", s.statsPage)
+	s.mux.HandleFunc("GET /stats/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/stats", http.StatusMovedPermanently)
+	})
 	s.mux.HandleFunc("GET /map", s.mapPage)
-	s.mux.HandleFunc("GET /peers.json", s.peersJSON)
-	s.mux.HandleFunc("GET /peers.csv", s.peersCSV)
-	s.mux.HandleFunc("GET /api/countries", s.countries)
+	s.mux.HandleFunc("GET /map/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/map", http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /api", s.apiPage)
+	s.mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/api", http.StatusMovedPermanently)
+	})
+	s.mux.HandleFunc("GET /peers.json", apiHandler(s.peersJSON))
+	s.mux.HandleFunc("OPTIONS /peers.json", apiHandler(s.peersJSON))
+	s.mux.HandleFunc("GET /peers.csv", apiHandler(s.peersCSV))
+	s.mux.HandleFunc("OPTIONS /peers.csv", apiHandler(s.peersCSV))
+	s.mux.HandleFunc("GET /api/countries", apiHandler(s.countries))
+	s.mux.HandleFunc("OPTIONS /api/countries", apiHandler(s.countries))
+	s.mux.HandleFunc("GET /api/v1/peers", apiHandler(s.apiPeers))
+	s.mux.HandleFunc("OPTIONS /api/v1/peers", apiHandler(s.apiPeers))
 }
 
 type countryGroup struct {
@@ -137,6 +154,13 @@ func (s *Server) mapPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) apiPage(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := s.tmpls.ExecuteTemplate(w, "api.html", nil); err != nil && !isBrokenPipe(err) {
+		log.Printf("template api: %v", err)
+	}
+}
+
 // peerRow is the JSON shape for a single peer. It's also used to derive the
 // CSV columns so the two formats stay in sync.
 type peerRow struct {
@@ -168,9 +192,13 @@ func toPeerRows(peers []store.PeerWithStats) []peerRow {
 			t := p.StateChangedAt.UTC()
 			stateChanged = &t
 		}
+		country := p.Country
+		if code := fetcher.CountryToIso(country); code != "" {
+			country = code
+		}
 		out[i] = peerRow{
 			URI:            p.URI,
-			Country:        p.Country,
+			Country:        country,
 			Protocol:       p.Protocol,
 			Host:           p.Host,
 			Port:           port,
@@ -262,6 +290,124 @@ func (s *Server) countries(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(counts); err != nil && !isBrokenPipe(err) {
 		log.Printf("json countries: %v", err)
 	}
+}
+
+// apiPeers handles GET /api/v1/peers.
+//
+// Supported query parameters:
+//
+//	country    – case-insensitive exact match on country name or ISO 3166-1 alpha-2 code (e.g., "us" or "US")
+//	protocol   – exact match on protocol (tcp, tls, quic, ws, wss, socks, sockstls)
+//	is_up      – "true" or "false"
+//	is_network – "true" or "false"
+func (s *Server) apiPeers(w http.ResponseWriter, r *http.Request) {
+	peers, err := s.store.GetPeersWithStats(store.StatsWindowDays)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Printf("GetPeersWithStats: %v", err)
+		return
+	}
+
+	q := r.URL.Query()
+	countryParam := q.Get("country")
+	var country string
+	if countryParam != "" {
+		country = strings.ToLower(countryParam)
+		if converted := fetcher.IsoToCountryName(countryParam); converted != "" {
+			country = strings.ToLower(converted)
+		}
+	}
+	var protocol string
+	if v := q.Get("protocol"); v != "" {
+		protocol = strings.ToLower(v)
+		validProtocols := map[string]bool{
+			"tcp": true, "tls": true, "quic": true,
+			"ws": true, "wss": true, "socks": true, "sockstls": true,
+		}
+		if !validProtocols[protocol] {
+			jsonError(w, `invalid protocol: must be one of tcp, tls, quic, ws, wss, socks, sockstls`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	var isUp, isNetwork *bool
+	if v := q.Get("is_up"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			jsonError(w, `invalid is_up: use "true" or "false"`, http.StatusBadRequest)
+			return
+		}
+		isUp = &b
+	}
+	if v := q.Get("is_network"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			jsonError(w, `invalid is_network: use "true" or "false"`, http.StatusBadRequest)
+			return
+		}
+		isNetwork = &b
+	}
+
+	rows := toPeerRows(peers)
+	filtered := rows[:0]
+	for _, p := range rows {
+		if country != "" && strings.ToLower(p.Country) != country {
+			continue
+		}
+		if protocol != "" && p.Protocol != protocol {
+			continue
+		}
+		if isUp != nil && p.IsUp != *isUp {
+			continue
+		}
+		if isNetwork != nil && p.IsNetwork != *isNetwork {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+
+	online := 0
+	for _, p := range filtered {
+		if p.IsUp {
+			online++
+		}
+	}
+
+	resp := peersResponse{
+		UpdatedAt:  time.Now().UTC(),
+		WindowDays: store.StatsWindowDays,
+		Total:      len(filtered),
+		Online:     online,
+		Peers:      filtered,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil && !isBrokenPipe(err) {
+		log.Printf("json api peers: %v", err)
+	}
+}
+
+// apiHandler wraps a data endpoint with CORS headers and a short Cache-Control
+// so browsers and CDNs can cache responses without hammering the database.
+func apiHandler(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Cache-Control", "public, max-age=30")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func jsonError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error string `json:"error"`
+	}{Error: msg})
 }
 
 func isBrokenPipe(err error) bool {

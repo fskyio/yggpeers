@@ -17,8 +17,10 @@
 				<a href="/">peers</a>
 				<a href="/stats">stats</a>
 				<a href="/map">map</a>
-				<a href="/peers.json">json</a>
-				<a href="/peers.csv">csv</a>
+				<a href="/api">api</a>
+				<span class="nav-spacer"></span>
+				<a href="/peers.json" class="export-btn">Export as JSON</a>
+				<a href="/peers.csv" class="export-btn">Export as CSV</a>
 			</nav>
 			<h1>Yggdrasil Peers Stats</h1>
 		</div>
@@ -116,9 +118,9 @@
 	<script>
 	(function() {
 		var isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-		var muted = isDark ? '#999' : '#777';
-		var onlineColor = isDark ? '#4caf50' : '#2a7d2a';
-		var offlineColor = isDark ? '#666' : '#bbb';
+		var muted = isDark ? '#a8a8a8' : '#555555';
+		var onlineColor = isDark ? '#65bb69' : '#1a5e1a';
+		var offlineColor = isDark ? '#a8a8a8' : '#555555';
 		var gridColor = isDark ? '#333' : '#eee';
 		var bgColor = isDark ? '#1a1a1a' : '#fff';
 		var fgColor = isDark ? '#e0e0e0' : '#111';

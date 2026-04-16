@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -12,8 +13,31 @@ import (
 // StatsWindowDays is the rolling window used for uptime calculations.
 const StatsWindowDays = 7
 
+// cacheTTL is how long query results are cached. Data only changes when the
+// checker runs (default every 5 minutes), so 30 seconds is a safe window.
+const cacheTTL = 30 * time.Second
+
+type cachedPeers struct {
+	value   []PeerWithStats
+	expires time.Time
+}
+
+type cachedStats struct {
+	value   *Stats
+	expires time.Time
+}
+
+type cachedCountries struct {
+	value   map[string]CountryCount
+	expires time.Time
+}
+
 type Store struct {
-	db *sql.DB
+	db      *sql.DB
+	cacheMu sync.Mutex
+	peers   cachedPeers
+	stats   cachedStats
+	countries cachedCountries
 }
 
 type Peer struct {
@@ -96,7 +120,10 @@ func New(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
+	// WAL mode supports concurrent readers. Allow up to 10 open connections
+	// so HTTP handlers don't queue behind each other or behind writes.
+	db.SetMaxOpenConns(10)
+	db.SetMaxIdleConns(5)
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA synchronous=NORMAL",
@@ -185,7 +212,11 @@ func (s *Store) BulkUpsertPeers(peers []PeerInput) error {
 		return err
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.invalidateCache()
+	return nil
 }
 
 func (s *Store) GetAllPeers() ([]Peer, error) {
@@ -251,7 +282,11 @@ func (s *Store) RecordChecks(results []CheckResult) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.invalidateCache()
+	return nil
 }
 
 func (s *Store) PruneOldChecks(days int) error {
@@ -261,7 +296,23 @@ func (s *Store) PruneOldChecks(days int) error {
 	return err
 }
 
+func (s *Store) invalidateCache() {
+	s.cacheMu.Lock()
+	s.peers.expires = time.Time{}
+	s.stats.expires = time.Time{}
+	s.countries.expires = time.Time{}
+	s.cacheMu.Unlock()
+}
+
 func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
+	s.cacheMu.Lock()
+	if time.Now().Before(s.peers.expires) {
+		cached := s.peers.value
+		s.cacheMu.Unlock()
+		return cached, nil
+	}
+	s.cacheMu.Unlock()
+
 	rows, err := s.db.Query(`
 		SELECT
 			p.id, p.uri, p.country, p.protocol, p.host, p.port,
@@ -292,7 +343,13 @@ func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
 		}
 		result = append(result, p)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.cacheMu.Lock()
+	s.peers = cachedPeers{value: result, expires: time.Now().Add(cacheTTL)}
+	s.cacheMu.Unlock()
+	return result, nil
 }
 
 // CountryCount holds total, online, and average uptime stats for a country.
@@ -305,6 +362,14 @@ type CountryCount struct {
 // GetCountryCounts returns peer counts grouped by country, excluding overlay
 // network peers (which don't have a real geographic location).
 func (s *Store) GetCountryCounts() (map[string]CountryCount, error) {
+	s.cacheMu.Lock()
+	if time.Now().Before(s.countries.expires) {
+		cached := s.countries.value
+		s.cacheMu.Unlock()
+		return cached, nil
+	}
+	s.cacheMu.Unlock()
+
 	rows, err := s.db.Query(`
 		SELECT
 			p.country,
@@ -336,10 +401,24 @@ func (s *Store) GetCountryCounts() (map[string]CountryCount, error) {
 		}
 		counts[country] = CountryCount{Total: total, Online: online, AvgUptime: avgUptime}
 	}
-	return counts, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	s.cacheMu.Lock()
+	s.countries = cachedCountries{value: counts, expires: time.Now().Add(cacheTTL)}
+	s.cacheMu.Unlock()
+	return counts, nil
 }
 
 func (s *Store) GetStats(windowDays int) (*Stats, error) {
+	s.cacheMu.Lock()
+	if time.Now().Before(s.stats.expires) {
+		cached := s.stats.value
+		s.cacheMu.Unlock()
+		return cached, nil
+	}
+	s.cacheMu.Unlock()
+
 	st := &Stats{}
 
 	err := s.db.QueryRow(`
@@ -504,5 +583,8 @@ func (s *Store) GetStats(windowDays int) (*Stats, error) {
 		})
 	}
 
+	s.cacheMu.Lock()
+	s.stats = cachedStats{value: st, expires: time.Now().Add(cacheTTL)}
+	s.cacheMu.Unlock()
 	return st, nil
 }
