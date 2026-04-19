@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // StatsWindowDays is the rolling window used for uptime calculations.
@@ -17,26 +17,32 @@ const StatsWindowDays = 7
 // checker runs (default every 5 minutes), so 30 seconds is a safe window.
 const cacheTTL = 30 * time.Second
 
+// Each cache slot has its own refreshMu to dedupe concurrent refreshes: on a
+// cold cache, only one goroutine runs the query while the rest block on the
+// mutex and pick up the freshly-populated value.
 type cachedPeers struct {
-	value   []PeerWithStats
-	expires time.Time
+	refreshMu sync.Mutex
+	value     []PeerWithStats
+	expires   time.Time
 }
 
 type cachedStats struct {
-	value   *Stats
-	expires time.Time
+	refreshMu sync.Mutex
+	value     *Stats
+	expires   time.Time
 }
 
 type cachedCountries struct {
-	value   map[string]CountryCount
-	expires time.Time
+	refreshMu sync.Mutex
+	value     map[string]CountryCount
+	expires   time.Time
 }
 
 type Store struct {
-	db      *sql.DB
-	cacheMu sync.Mutex
-	peers   cachedPeers
-	stats   cachedStats
+	db        *sql.DB
+	cacheMu   sync.Mutex
+	peers     cachedPeers
+	stats     cachedStats
 	countries cachedCountries
 }
 
@@ -116,7 +122,12 @@ type CountryProtocolStat struct {
 }
 
 func New(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	// Per-connection pragmas go through the DSN so every pooled connection
+	// gets them — Exec-ing a PRAGMA only affects the connection that ran it.
+	// cache_size=-40000 asks SQLite for a ~40 MB page cache so the hot parts
+	// of checks/daily_peer_stats stay resident across cold-cache refreshes.
+	dsn := path + "?_journal_mode=WAL&_synchronous=NORMAL&_foreign_keys=1&_busy_timeout=5000&_cache_size=-40000"
+	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -124,25 +135,37 @@ func New(path string) (*Store, error) {
 	// so HTTP handlers don't queue behind each other or behind writes.
 	db.SetMaxOpenConns(10)
 	db.SetMaxIdleConns(5)
-	pragmas := []string{
-		"PRAGMA journal_mode=WAL",
-		"PRAGMA synchronous=NORMAL",
-		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
-	}
-	for _, p := range pragmas {
-		if _, err := db.Exec(p); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
-		}
-	}
 	s := &Store{db: db}
-	return s, s.migrate()
+	if err := s.migrate(); err != nil {
+		return nil, err
+	}
+	// ANALYZE lets the planner pick the best index for the new
+	// (peer_id, day) primary key on daily_peer_stats and the date index
+	// on checks once the tables have real cardinality.
+	if _, err := db.Exec("ANALYZE"); err != nil {
+		return nil, fmt.Errorf("analyze: %w", err)
+	}
+	return s, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// RefreshCaches invalidates all cached query results and repopulates them.
+// The checker calls this after writing new data so the next user-facing
+// request never has to wait on a cold-cache query.
+func (s *Store) RefreshCaches() {
+	s.cacheMu.Lock()
+	s.peers.expires = time.Time{}
+	s.stats.expires = time.Time{}
+	s.countries.expires = time.Time{}
+	s.cacheMu.Unlock()
+	_, _ = s.GetPeersWithStats(StatsWindowDays)
+	_, _ = s.GetStats(StatsWindowDays)
+	_, _ = s.GetCountryCounts()
+}
+
 func (s *Store) migrate() error {
-	_, err := s.db.Exec(`
+	if _, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS peers (
 			id               INTEGER PRIMARY KEY AUTOINCREMENT,
 			uri              TEXT UNIQUE NOT NULL,
@@ -162,8 +185,54 @@ func (s *Store) migrate() error {
 		);
 		CREATE INDEX IF NOT EXISTS idx_checks_peer_checked
 			ON checks(peer_id, checked_at);
+		CREATE INDEX IF NOT EXISTS idx_checks_checked_at
+			ON checks(checked_at);
+		CREATE INDEX IF NOT EXISTS idx_peers_is_network_country
+			ON peers(is_network, country);
+		CREATE TABLE IF NOT EXISTS daily_peer_stats (
+			peer_id  INTEGER NOT NULL REFERENCES peers(id) ON DELETE CASCADE,
+			day      TEXT    NOT NULL,
+			checks   INTEGER NOT NULL DEFAULT 0,
+			up_count INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY (peer_id, day)
+		);
+		CREATE INDEX IF NOT EXISTS idx_daily_peer_stats_day
+			ON daily_peer_stats(day);
+	`); err != nil {
+		return err
+	}
+	return s.backfillDailyStats()
+}
+
+// backfillDailyStats populates daily_peer_stats from the checks table the
+// first time the new schema is seen. It's a no-op on subsequent boots once
+// the rollup table has any rows (the checker keeps it up-to-date from then
+// on, so re-aggregating checks would double-count).
+func (s *Store) backfillDailyStats() error {
+	var rollupCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM daily_peer_stats`).Scan(&rollupCount); err != nil {
+		return fmt.Errorf("backfill check: %w", err)
+	}
+	if rollupCount > 0 {
+		return nil
+	}
+	var checkCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM checks`).Scan(&checkCount); err != nil {
+		return fmt.Errorf("backfill check: %w", err)
+	}
+	if checkCount == 0 {
+		return nil
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO daily_peer_stats (peer_id, day, checks, up_count)
+		SELECT peer_id, DATE(checked_at), COUNT(*), COALESCE(SUM(is_up), 0)
+		FROM checks
+		GROUP BY peer_id, DATE(checked_at)
 	`)
-	return err
+	if err != nil {
+		return fmt.Errorf("backfill: %w", err)
+	}
+	return nil
 }
 
 // BulkUpsertPeers inserts or updates the given peers and removes any peers
@@ -212,11 +281,7 @@ func (s *Store) BulkUpsertPeers(peers []PeerInput) error {
 		return err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	s.invalidateCache()
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) GetAllPeers() ([]Peer, error) {
@@ -274,6 +339,20 @@ func (s *Store) RecordChecks(results []CheckResult) error {
 	}
 	defer updatePeer.Close()
 
+	// Roll up into daily_peer_stats as we go so /stats and / don't have to
+	// aggregate the raw checks table at request time.
+	upsertDaily, err := tx.Prepare(`
+		INSERT INTO daily_peer_stats (peer_id, day, checks, up_count)
+		VALUES (?, DATE('now'), 1, ?)
+		ON CONFLICT(peer_id, day) DO UPDATE SET
+			checks   = checks   + 1,
+			up_count = up_count + excluded.up_count
+	`)
+	if err != nil {
+		return err
+	}
+	defer upsertDaily.Close()
+
 	for _, r := range results {
 		if _, err := insertCheck.Exec(r.PeerID, r.IsUp); err != nil {
 			return err
@@ -281,30 +360,41 @@ func (s *Store) RecordChecks(results []CheckResult) error {
 		if _, err := updatePeer.Exec(r.IsUp, r.IsUp, r.PeerID); err != nil {
 			return err
 		}
+		up := 0
+		if r.IsUp {
+			up = 1
+		}
+		if _, err := upsertDaily.Exec(r.PeerID, up); err != nil {
+			return err
+		}
 	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	s.invalidateCache()
-	return nil
+	return tx.Commit()
 }
 
 func (s *Store) PruneOldChecks(days int) error {
-	_, err := s.db.Exec(
+	if _, err := s.db.Exec(
 		`DELETE FROM checks WHERE checked_at < datetime('now', '-' || ? || ' days')`, days,
+	); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(
+		`DELETE FROM daily_peer_stats WHERE day < DATE('now', '-' || ? || ' days')`, days,
 	)
 	return err
 }
 
-func (s *Store) invalidateCache() {
-	s.cacheMu.Lock()
-	s.peers.expires = time.Time{}
-	s.stats.expires = time.Time{}
-	s.countries.expires = time.Time{}
-	s.cacheMu.Unlock()
-}
-
 func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
+	s.cacheMu.Lock()
+	if time.Now().Before(s.peers.expires) {
+		cached := s.peers.value
+		s.cacheMu.Unlock()
+		return cached, nil
+	}
+	s.cacheMu.Unlock()
+
+	s.peers.refreshMu.Lock()
+	defer s.peers.refreshMu.Unlock()
+	// Another caller may have refreshed while we waited.
 	s.cacheMu.Lock()
 	if time.Now().Before(s.peers.expires) {
 		cached := s.peers.value
@@ -317,13 +407,13 @@ func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
 		SELECT
 			p.id, p.uri, p.country, p.protocol, p.host, p.port,
 			p.is_up, p.is_network, p.state_changed_at,
-			CASE WHEN COUNT(c.id) = 0 THEN NULL
-			     ELSE CAST(SUM(c.is_up) AS REAL) / COUNT(c.id) * 100
+			CASE WHEN COALESCE(SUM(d.checks), 0) = 0 THEN NULL
+			     ELSE CAST(SUM(d.up_count) AS REAL) / SUM(d.checks) * 100
 			END
 		FROM peers p
-		LEFT JOIN checks c
-			ON c.peer_id = p.id
-			AND c.checked_at >= datetime('now', '-' || ? || ' days')
+		LEFT JOIN daily_peer_stats d
+			ON d.peer_id = p.id
+			AND d.day >= DATE('now', '-' || ? || ' days')
 		GROUP BY p.id
 		ORDER BY p.country, p.is_up DESC, p.uri
 	`, windowDays)
@@ -347,7 +437,8 @@ func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
 		return nil, err
 	}
 	s.cacheMu.Lock()
-	s.peers = cachedPeers{value: result, expires: time.Now().Add(cacheTTL)}
+	s.peers.value = result
+	s.peers.expires = time.Now().Add(cacheTTL)
 	s.cacheMu.Unlock()
 	return result, nil
 }
@@ -370,6 +461,16 @@ func (s *Store) GetCountryCounts() (map[string]CountryCount, error) {
 	}
 	s.cacheMu.Unlock()
 
+	s.countries.refreshMu.Lock()
+	defer s.countries.refreshMu.Unlock()
+	s.cacheMu.Lock()
+	if time.Now().Before(s.countries.expires) {
+		cached := s.countries.value
+		s.cacheMu.Unlock()
+		return cached, nil
+	}
+	s.cacheMu.Unlock()
+
 	rows, err := s.db.Query(`
 		SELECT
 			p.country,
@@ -378,11 +479,11 @@ func (s *Store) GetCountryCounts() (map[string]CountryCount, error) {
 			AVG(u.uptime)
 		FROM peers p
 		LEFT JOIN (
-			SELECT c.peer_id,
-				CAST(SUM(c.is_up) AS REAL) / COUNT(c.id) * 100 AS uptime
-			FROM checks c
-			WHERE c.checked_at >= datetime('now', '-' || ? || ' days')
-			GROUP BY c.peer_id
+			SELECT peer_id,
+				CAST(SUM(up_count) AS REAL) / SUM(checks) * 100 AS uptime
+			FROM daily_peer_stats
+			WHERE day >= DATE('now', '-' || ? || ' days')
+			GROUP BY peer_id
 		) u ON u.peer_id = p.id
 		WHERE p.is_network = 0
 		GROUP BY p.country
@@ -405,12 +506,23 @@ func (s *Store) GetCountryCounts() (map[string]CountryCount, error) {
 		return nil, err
 	}
 	s.cacheMu.Lock()
-	s.countries = cachedCountries{value: counts, expires: time.Now().Add(cacheTTL)}
+	s.countries.value = counts
+	s.countries.expires = time.Now().Add(cacheTTL)
 	s.cacheMu.Unlock()
 	return counts, nil
 }
 
 func (s *Store) GetStats(windowDays int) (*Stats, error) {
+	s.cacheMu.Lock()
+	if time.Now().Before(s.stats.expires) {
+		cached := s.stats.value
+		s.cacheMu.Unlock()
+		return cached, nil
+	}
+	s.cacheMu.Unlock()
+
+	s.stats.refreshMu.Lock()
+	defer s.stats.refreshMu.Unlock()
 	s.cacheMu.Lock()
 	if time.Now().Before(s.stats.expires) {
 		cached := s.stats.value
@@ -434,10 +546,10 @@ func (s *Store) GetStats(windowDays int) (*Stats, error) {
 
 	err = s.db.QueryRow(`
 		SELECT AVG(uptime) FROM (
-			SELECT CAST(SUM(c.is_up) AS REAL) / COUNT(c.id) * 100 as uptime
+			SELECT CAST(SUM(d.up_count) AS REAL) / SUM(d.checks) * 100 AS uptime
 			FROM peers p
-			JOIN checks c ON c.peer_id = p.id
-				AND c.checked_at >= datetime('now', '-' || ? || ' days')
+			JOIN daily_peer_stats d ON d.peer_id = p.id
+				AND d.day >= DATE('now', '-' || ? || ' days')
 			WHERE p.is_network = 0
 			GROUP BY p.id
 		)
@@ -454,11 +566,11 @@ func (s *Store) GetStats(windowDays int) (*Stats, error) {
 			AVG(u.uptime)
 		FROM peers p
 		LEFT JOIN (
-			SELECT c.peer_id,
-				CAST(SUM(c.is_up) AS REAL) / COUNT(c.id) * 100 AS uptime
-			FROM checks c
-			WHERE c.checked_at >= datetime('now', '-' || ? || ' days')
-			GROUP BY c.peer_id
+			SELECT peer_id,
+				CAST(SUM(up_count) AS REAL) / SUM(checks) * 100 AS uptime
+			FROM daily_peer_stats
+			WHERE day >= DATE('now', '-' || ? || ' days')
+			GROUP BY peer_id
 		) u ON u.peer_id = p.id
 		WHERE p.is_network = 0
 		GROUP BY p.country
@@ -515,13 +627,16 @@ func (s *Store) GetStats(windowDays int) (*Stats, error) {
 	st.Protocols = protos
 
 	// Daily timeline (peers checked per day and how many were online).
+	// daily_peer_stats has one row per (peer, day), so COUNT(*) gives the
+	// distinct peer count and SUM(up_count)/SUM(checks)*COUNT(*) reproduces
+	// the old "fraction up × peers seen" estimate over far fewer rows.
 	timelineRows, err := s.db.Query(`
 		SELECT
-			DATE(checked_at) AS day,
-			COUNT(DISTINCT peer_id) AS total,
-			SUM(is_up) * 1.0 / COUNT(*) * COUNT(DISTINCT peer_id) AS online_approx
-		FROM checks
-		WHERE checked_at >= datetime('now', '-' || ? || ' days')
+			day,
+			COUNT(*) AS total,
+			SUM(up_count) * 1.0 / SUM(checks) * COUNT(*) AS online_approx
+		FROM daily_peer_stats
+		WHERE day >= DATE('now', '-' || ? || ' days')
 		GROUP BY day
 		ORDER BY day
 	`, windowDays)
@@ -584,7 +699,8 @@ func (s *Store) GetStats(windowDays int) (*Stats, error) {
 	}
 
 	s.cacheMu.Lock()
-	s.stats = cachedStats{value: st, expires: time.Now().Add(cacheTTL)}
+	s.stats.value = st
+	s.stats.expires = time.Now().Add(cacheTTL)
 	s.cacheMu.Unlock()
 	return st, nil
 }

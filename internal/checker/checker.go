@@ -103,6 +103,9 @@ func (c *Checker) CheckAll(ctx context.Context) error {
 	if err := c.store.PruneOldChecks(store.StatsWindowDays); err != nil {
 		log.Printf("warn: prune old checks: %v", err)
 	}
+	// Re-run the expensive aggregate queries now, while the checker is
+	// already active, so HTTP handlers always read from a warm cache.
+	c.store.RefreshCaches()
 	log.Println("Check complete.")
 	return nil
 }
