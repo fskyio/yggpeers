@@ -7,7 +7,7 @@ A webapp that tracks the reachability of public peers for the Yggdrasil network.
 ### Container (recommended)
 
 ```sh
-docker run -p 8080:8080 foundry.fsky.io/fsky/yggpeers:latest
+docker run -p 8080:8080 gitfield.org/fsky/yggpeers:latest
 ```
 
 A [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html) unit file is available at [`contrib/quadlet/yggpeers.container`](contrib/quadlet/yggpeers.container) for deploying with Podman and systemd.
