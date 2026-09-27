@@ -14,6 +14,9 @@ go.work
 go.work.sum
 
 # goreleaser builds
+
+# Local build output
+/build/
 dist/
 
 # Data files

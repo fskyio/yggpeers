@@ -17,11 +17,15 @@ A [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html
 Requires Go 1.26+.
 
 ```sh
-go build -o yggpeers cmd/yggpeers/main.go
-./yggpeers
+make build
+./build/yggpeers
 ```
 
+Use `make run` to start directly with `go run`. `make test`, `make lint`, and `make fmt` run the common test, vet, and formatting commands; `make check` runs the full checks.
+
 Then open http://localhost:8080 in your browser.
+
+See `make help` for available commands.
 
 ## Map
 

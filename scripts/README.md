@@ -11,10 +11,10 @@ The boundary source is Natural Earth v5.1.2, `ne_10m_admin_0_countries.geojson`,
 Requires Python 3 (standard library only) and [Tippecanoe 2.79.0](https://github.com/felt/tippecanoe/tree/2.79.0). Neither is needed for normal application builds. With Tippecanoe on `PATH`:
 
 ```sh
-python3 scripts/build-map.py
+make map-build
 ```
 
-Use `--tippecanoe /path/to/tippecanoe` for a local build, or `--source /path/to/ne_10m_admin_0_countries.geojson` to reuse the pinned source without downloading it again. The source checksum is checked in both cases. Commit the generated archive and catalog together. Rebuild the Go binary/container to include them.
+Use `MAP_ARGS="--tippecanoe /path/to/tippecanoe"` for a local build, or `MAP_ARGS="--source /path/to/ne_10m_admin_0_countries.geojson"` to reuse the pinned source without downloading it again. Commit the generated archive and catalog together. Rebuild the Go binary/container to include them.
 
 The generator retains separate country identities, simplifies shared borders consistently, and does not merge small polygons into their neighbours. Maximum-zoom geometry is not simplified beyond tile-coordinate quantization. The data source and generation options are also recorded in the archive metadata.
 
@@ -23,18 +23,17 @@ The vendored `pmtiles-4.5.0.js` comes from `pmtiles@4.5.0/dist/pmtiles.js` on np
 ## Verify
 
 ```sh
-go test ./...
-go vet ./...
+make test
+make lint
 ```
 
 Go checks exercise the production HTTP route's actual archive bytes, range headers, invalid ranges, ETag revalidation, and country/territory aliases and markers.
 
-For browser checks, start the app locally, then install Playwright in a temporary directory so it does not become an application build dependency:
+For browser checks, start the app with `make run` in one terminal, then install the temporary Playwright tools and run the check in another:
 
 ```sh
-npm install --prefix /tmp/yggpeers-map-tools playwright@1.58.2
-/tmp/yggpeers-map-tools/node_modules/.bin/playwright install chromium
-NODE_PATH=/tmp/yggpeers-map-tools/node_modules node scripts/check-map.cjs
+make map-tools
+make map-check
 ```
 
 Optional variables: `MAP_URL` (default `http://127.0.0.1:8080`), `MAP_QA_DIR` (default `/tmp/yggpeers-map-qa`), and `CHROMIUM_PATH` (an existing Chromium executable).
