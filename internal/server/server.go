@@ -54,6 +54,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) routes() {
+	s.mux.HandleFunc("GET /static/countries.pmtiles", s.mapTiles)
 	s.mux.Handle("GET /static/", http.FileServer(http.FS(staticFS)))
 	s.mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFileFS(w, r, staticFS, "static/favicon.ico")

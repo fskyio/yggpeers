@@ -18,3 +18,7 @@ dist/
 
 # Data files
 data/
+
+# Python caches
+__pycache__/
+*.py[cod]

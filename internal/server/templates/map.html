@@ -28,6 +28,7 @@
 	</header>
 	<main class="map-page">
 		<div id="map"></div>
+		<p id="map-status" role="status" hidden></p>
 		<div id="webgl-warning" style="display:none;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;padding:2rem;background:var(--bg);border:1px solid var(--border);">
 			<p style="font-size:1.1rem;font-weight:bold;margin-bottom:0.5rem;">WebGL Required</p>
 			<p style="color:var(--muted);">The interactive map requires WebGL to render. Please enable WebGL in your browser settings or try a different browser.</p>
@@ -42,8 +43,8 @@
 			<div class="legend-header">
 				<strong>Peers per country</strong>
 				<div class="toggle-group">
-					<button class="toggle-btn active" data-mode="total">Total</button>
-					<button class="toggle-btn" data-mode="online">Online</button>
+					<button class="toggle-btn active" data-mode="total" aria-pressed="true" disabled>Total</button>
+					<button class="toggle-btn" data-mode="online" aria-pressed="false" disabled>Online</button>
 				</div>
 			</div>
 			<div><span class="swatch" style="background:#c2e699"></span> 1&ndash;2</div>
@@ -54,187 +55,8 @@
 		</div>
 	</main>
 	<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
-	<script>
-		var displayMode = 'total';
-
-		function webglSupported() {
-			try {
-				var canvas = document.createElement('canvas');
-				return !!(window.WebGLRenderingContext &&
-					(canvas.getContext('webgl') || canvas.getContext('experimental-webgl')));
-			} catch (e) {
-				return false;
-			}
-		}
-
-		if (!webglSupported()) {
-			document.getElementById('webgl-warning').style.display = 'block';
-			document.getElementById('legend').style.display = 'none';
-		}
-
-		var map = new maplibregl.Map({
-			container: 'map',
-			style: {
-				version: 8,
-				// The bundled country geometry provides the basemap; no tile service or API key is needed.
-				sources: {},
-				layers: [{
-					id: 'background',
-					type: 'background',
-					paint: { 'background-color': '#e8eef2' }
-				}]
-			},
-			center: [0, 30],
-			zoom: 2,
-			renderWorldCopies: false
-		});
-
-		var nameCorrections = {
-			'United States': 'United States of America',
-			'Russia': 'Russian Federation',
-			'South Korea': 'Korea',
-			'Taiwan': 'Taiwan'
-		};
-		var reverseLookup = {};
-		for (var k in nameCorrections) {
-			reverseLookup[nameCorrections[k]] = k;
-		}
-
-		var colorScale = ['#c2e699', '#78c679', '#31a354', '#006837', '#0c3a24'];
-
-		// Update legend swatches to match the active color scale
-		(function() {
-			var swatches = document.querySelectorAll('#legend .swatch');
-			colorScale.forEach(function(c, i) { swatches[i].style.background = c; });
-		})();
-
-		function getColor(n) {
-			if (!n || n === 0) return 'rgba(0,0,0,0)';
-			if (n < 3)  return colorScale[0];
-			if (n < 5)  return colorScale[1];
-			if (n < 10) return colorScale[2];
-			if (n < 20) return colorScale[3];
-			return colorScale[4];
-		}
-
-		function getColorForMode(info, mode) {
-			var count = mode === 'online' ? info.online : info.total;
-			return getColor(count);
-		}
-
-		function findCount(counts, geoName) {
-			if (counts[geoName] !== undefined) return counts[geoName];
-			if (reverseLookup[geoName] && counts[reverseLookup[geoName]] !== undefined)
-				return counts[reverseLookup[geoName]];
-			var lower = geoName.toLowerCase();
-			for (var key in counts) {
-				if (key.toLowerCase() === lower) return counts[key];
-			}
-			return {total: 0, online: 0, avgUptime: null};
-		}
-
-		map.on('load', function() {
-			Promise.all([
-				fetch('/api/countries').then(function(r) { return r.json(); }),
-				fetch('/static/countries.geojson').then(function(r) { return r.json(); })
-			]).then(function(results) {
-				var counts = results[0];
-				var geojson = results[1];
-
-				geojson.features.forEach(function(f) {
-					var name = f.properties.name;
-					var info = findCount(counts, name);
-					f.properties.peerCount = info.total;
-					f.properties.onlineCount = info.online;
-					f.properties.avgUptime = info.avgUptime;
-					f.properties.fillColor = getColorForMode(info, displayMode);
-				});
-
-				map.addSource('countries', { type: 'geojson', data: geojson });
-
-				map.addLayer({
-					id: 'countries-base',
-					type: 'fill',
-					source: 'countries',
-					paint: { 'fill-color': '#fafaf8' }
-				});
-
-				map.addLayer({
-					id: 'countries-fill',
-					type: 'fill',
-					source: 'countries',
-					paint: {
-						'fill-color': ['get', 'fillColor'],
-						'fill-opacity': 0.7
-					}
-				});
-
-				map.addLayer({
-					id: 'countries-outline',
-					type: 'line',
-					source: 'countries',
-					paint: {
-						'line-color': '#888',
-						'line-width': 0.5
-					}
-				});
-
-				var popup = new maplibregl.Popup({
-					closeButton: false,
-					closeOnClick: false
-				});
-
-				map.on('mousemove', 'countries-fill', function(e) {
-					map.getCanvas().style.cursor = 'pointer';
-					var props = e.features[0].properties;
-					var total = props.peerCount;
-					var online = props.onlineCount;
-					var uptime = props.avgUptime;
-					var label = '<strong>' + props.name + '</strong>';
-					if (total > 0) {
-						var onlinePct = Math.round(online / total * 100);
-						label += '<br>' + total + ' total peer' + (total !== 1 ? 's' : '');
-						label += '<br>' + online + ' online, ' + onlinePct + '% online';
-						if (uptime !== null && uptime !== 'null') {
-							label += '<br>' + parseFloat(uptime).toFixed(1) + '% avg. uptime';
-						}
-					} else {
-						label += '<br><span style="color:#888">No peers</span>';
-					}
-					popup.setLngLat(e.lngLat).setHTML(label).addTo(map);
-				});
-
-				map.on('mouseleave', 'countries-fill', function() {
-					map.getCanvas().style.cursor = '';
-					popup.remove();
-				});
-
-				// Toggle button handler
-				document.querySelectorAll('.toggle-btn').forEach(function(btn) {
-					btn.addEventListener('click', function() {
-						var newMode = this.getAttribute('data-mode');
-						displayMode = newMode;
-
-						// Update active state
-						document.querySelectorAll('.toggle-btn').forEach(function(b) {
-							b.classList.remove('active');
-						});
-						this.classList.add('active');
-
-						// Update colors
-						geojson.features.forEach(function(f) {
-							var name = f.properties.name;
-							var info = findCount(counts, name);
-							f.properties.fillColor = getColorForMode(info, displayMode);
-						});
-
-						// Update the source
-						map.getSource('countries').setData(geojson);
-					});
-				});
-			});
-		});
-	</script>
+	<script src="/static/pmtiles-4.5.0.js"></script>
+	<script src="/static/map.js"></script>
 </body>
 </html>
 {{end}}

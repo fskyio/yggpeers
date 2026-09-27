@@ -23,6 +23,14 @@ go build -o yggpeers cmd/yggpeers/main.go
 
 Then open http://localhost:8080 in your browser.
 
+## Map
+
+Country and territory boundaries are bundled as vector tiles in a PMTiles archive. The browser downloads only the portions needed for the current view, with finer detail as you zoom in. No map tile service or API key is required. Hong Kong, Singapore, and other small places with peers have hoverable markers when zoomed out; clicking a marker zooms to its boundary.
+
+The archive is about 4.9 MB on the server, not a full download per visitor. Peer counts are fetched separately, and switching Total/Online reuses the loaded geometry. The map uses Natural Earth's 1:10 million boundaries, which provide regional rather than street-level detail.
+
+Map assets are embedded in the binary. Normal Go and container builds need no extra tools. See [map maintenance and verification](scripts/README.md) to regenerate the assets or run the browser checks. A reverse proxy must preserve HTTP byte-range responses for `/static/countries.pmtiles` and must not apply whole-file gzip/Brotli compression to that archive.
+
 ## Configuration
 
 Configuration is handled through environment variables:
@@ -43,3 +51,5 @@ Configuration is handled through environment variables:
 ## License
 
 The code of this project is released under the [Unlicense](https://unlicense.org/). See the `LICENSE` file for details.
+
+Bundled map data is public-domain [Natural Earth](https://www.naturalearthdata.com/about/terms-of-use/) data. The PMTiles reader and its bundled dependency retain their [third-party licenses](internal/server/static/pmtiles-LICENSE.txt).
