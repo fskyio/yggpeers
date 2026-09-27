@@ -76,15 +76,13 @@
 			container: 'map',
 			style: {
 				version: 8,
-				sources: {
-					osm: {
-						type: 'raster',
-						tiles: ['https://a.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}.png'],
-						tileSize: 256,
-						attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-					}
-				},
-				layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+				// The bundled country geometry provides the basemap; no tile service or API key is needed.
+				sources: {},
+				layers: [{
+					id: 'background',
+					type: 'background',
+					paint: { 'background-color': '#e8eef2' }
+				}]
 			},
 			center: [0, 30],
 			zoom: 2,
@@ -153,6 +151,13 @@
 				});
 
 				map.addSource('countries', { type: 'geojson', data: geojson });
+
+				map.addLayer({
+					id: 'countries-base',
+					type: 'fill',
+					source: 'countries',
+					paint: { 'fill-color': '#fafaf8' }
+				});
 
 				map.addLayer({
 					id: 'countries-fill',
