@@ -14,7 +14,7 @@ A [Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html
 
 ### From source
 
-Requires Go 1.26+ and [Git](https://git-scm.com/).
+Requires Go 1.26+.
 
 ```sh
 go build -o yggpeers cmd/yggpeers/main.go
@@ -39,8 +39,7 @@ Configuration is handled through environment variables:
 | ----------------------- | --------------------- | ------------------------------------------------------- |
 | `LISTEN_ADDR`           | `:8080`               | Address for the HTTP server to listen on.               |
 | `DB_PATH`               | `./data/yggpeers.db`  | Path to the SQLite database file.                       |
-| `REPO_DIR`              | `./data/public-peers` | Path where the public-peers repo is cloned.             |
-| `FETCH_INTERVAL`        | `15m`                 | How often to pull and re-parse the public-peers repo.   |
+| `FETCH_INTERVAL`        | `15m`                 | How often to refresh the public-peers snapshot.         |
 | `CHECK_INTERVAL`        | `5m`                  | How often to run reachability checks.                   |
 | `DIAL_TIMEOUT`          | `5s`                  | Timeout for individual network dials.                   |
 | `MAX_CONCURRENT_CHECKS` | `50`                  | Maximum number of concurrent peer checks.               |

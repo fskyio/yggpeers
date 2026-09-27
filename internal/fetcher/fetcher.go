@@ -1,21 +1,31 @@
 package fetcher
 
 import (
+	"archive/tar"
 	"bufio"
+	"compress/gzip"
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strings"
+	"time"
 
-	"yggpeers/internal/config"
 	"yggpeers/internal/store"
 )
 
-const repoURL = "https://github.com/yggdrasil-network/public-peers.git"
+const (
+	repoArchiveURL      = "https://github.com/yggdrasil-network/public-peers/archive/refs/heads/master.tar.gz"
+	maxArchiveBytes     = 10 << 20
+	maxExpandedBytes    = 50 << 20
+	maxPeerFileBytes    = 1 << 20
+	archiveFetchTimeout = 30 * time.Second
+)
 
 var peerURIRe = regexp.MustCompile("`((?:tcp|tls|quic|ws|wss|socks|sockstls)://[^`\\r\\n]+)`")
 
@@ -227,73 +237,113 @@ func CountryToIso(name string) string {
 }
 
 type Fetcher struct {
-	cfg   config.Config
-	store *store.Store
+	store      peerStore
+	client     *http.Client
+	archiveURL string
+	etag       string
 }
 
-func New(cfg config.Config, s *store.Store) *Fetcher {
-	return &Fetcher{cfg: cfg, store: s}
+type peerStore interface {
+	BulkUpsertPeers([]store.PeerInput) error
 }
 
-func (f *Fetcher) FetchAndParse() error {
-	if err := f.updateRepo(); err != nil {
-		return err
+func New(s *store.Store) *Fetcher {
+	return &Fetcher{
+		store:      s,
+		client:     &http.Client{Timeout: archiveFetchTimeout},
+		archiveURL: repoArchiveURL,
 	}
-	return f.parseAndStore()
 }
 
-func (f *Fetcher) updateRepo() error {
-	gitDir := filepath.Join(f.cfg.RepoDir, ".git")
-	if _, err := os.Stat(gitDir); err == nil {
-		log.Println("Updating public-peers repo...")
-		cmd := exec.Command("git", "-C", f.cfg.RepoDir, "pull", "--ff-only")
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		return cmd.Run()
-	} else if !os.IsNotExist(err) {
-		return err
+func (f *Fetcher) FetchAndParse(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.archiveURL, nil)
+	if err != nil {
+		return fmt.Errorf("create archive request: %w", err)
+	}
+	if f.etag != "" {
+		req.Header.Set("If-None-Match", f.etag)
+	}
+	// Keep the representation (and therefore its ETag) stable, and leave the
+	// archive's gzip layer for the bounded reader below to validate.
+	req.Header.Set("Accept-Encoding", "identity")
+	req.Header.Set("User-Agent", "yggpeers")
+
+	log.Println("Fetching public-peers archive...")
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch archive: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotModified {
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch archive: unexpected HTTP status %s", resp.Status)
+	}
+	if resp.ContentLength > maxArchiveBytes {
+		return fmt.Errorf("fetch archive: compressed archive exceeds %d bytes", maxArchiveBytes)
 	}
 
-	// .git is missing — make sure the target directory itself is either
-	// missing or empty before letting git clone touch it, so we don't
-	// accidentally fight with whatever is already there.
-	if entries, err := os.ReadDir(f.cfg.RepoDir); err == nil {
-		if len(entries) > 0 {
-			return fmt.Errorf("repo dir %q exists and is not empty but is not a git repo", f.cfg.RepoDir)
-		}
-	} else if !os.IsNotExist(err) {
+	compressed := &io.LimitedReader{R: resp.Body, N: maxArchiveBytes + 1}
+	gz, err := gzip.NewReader(compressed)
+	if err != nil {
+		return fmt.Errorf("open archive: %w", err)
+	}
+	peers, err := parsePeerArchive(gz)
+	closeErr := gz.Close()
+	if err != nil {
 		return err
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close archive: %w", closeErr)
+	}
+	if compressed.N == 0 {
+		return fmt.Errorf("fetch archive: compressed archive exceeds %d bytes", maxArchiveBytes)
+	}
+	if len(peers) == 0 {
+		return errors.New("archive contained no peers")
+	}
+	if err := f.store.BulkUpsertPeers(peers); err != nil {
+		return fmt.Errorf("store peers: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(f.cfg.RepoDir), 0o755); err != nil {
-		return err
-	}
-	log.Println("Cloning public-peers repo...")
-	cmd := exec.Command("git", "clone", "--depth=1", repoURL, f.cfg.RepoDir)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	f.etag = resp.Header.Get("ETag")
+	return nil
 }
 
-func (f *Fetcher) parseAndStore() error {
+func parsePeerArchive(r io.Reader) ([]store.PeerInput, error) {
 	var peers []store.PeerInput
-
-	err := filepath.Walk(f.cfg.RepoDir, func(path string, info os.FileInfo, err error) error {
+	expanded := &io.LimitedReader{R: r, N: maxExpandedBytes + 1}
+	tr := tar.NewReader(expanded)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("read archive: %w", err)
 		}
-		base := filepath.Base(path)
-		if info.IsDir() || !strings.HasSuffix(base, ".md") || strings.EqualFold(base, "README.md") {
-			return nil
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			continue
+		}
+		if !validArchivePath(header.Name) {
+			return nil, fmt.Errorf("archive contains invalid path %q", header.Name)
+		}
+		base := path.Base(header.Name)
+		if !strings.HasSuffix(base, ".md") || strings.EqualFold(base, "README.md") {
+			continue
+		}
+		if header.Size > maxPeerFileBytes {
+			return nil, fmt.Errorf("archive file %q exceeds %d bytes", header.Name, maxPeerFileBytes)
 		}
 
-		parentDir := filepath.Base(filepath.Dir(path))
+		parentDir := path.Base(path.Dir(header.Name))
 		isNetwork := parentDir == "other"
 		country := filenameToCountry(base)
-		uris, parseErr := parsePeerFile(path)
-		if parseErr != nil {
-			log.Printf("warn: parse %s: %v", path, parseErr)
-			return nil
+		uris, err := parsePeerReader(tr)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: %w", header.Name, err)
 		}
 		for _, uri := range uris {
 			proto, host, port, err := parsePeerURI(uri)
@@ -313,29 +363,31 @@ func (f *Fetcher) parseAndStore() error {
 				IsNetwork: isNetwork,
 			})
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
-	if len(peers) == 0 {
-		// Defensive: if parsing yielded nothing, don't wipe the existing
-		// peer table. Likely a transient parse failure or empty checkout.
-		log.Println("warn: parse produced no peers, skipping store update")
-		return nil
+	if _, err := io.Copy(io.Discard, expanded); err != nil {
+		return nil, fmt.Errorf("read archive: %w", err)
 	}
-	return f.store.BulkUpsertPeers(peers)
+	if expanded.N == 0 {
+		return nil, fmt.Errorf("archive exceeds %d expanded bytes", maxExpandedBytes)
+	}
+	return peers, nil
 }
 
-func parsePeerFile(path string) ([]string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+func validArchivePath(name string) bool {
+	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
+		return false
 	}
-	defer f.Close()
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
+}
 
+func parsePeerReader(r io.Reader) ([]string, error) {
 	var uris []string
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(r)
 	// Allow long markdown lines (default is 64 KiB).
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {

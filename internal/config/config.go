@@ -8,7 +8,6 @@ import (
 
 type Config struct {
 	ListenAddr          string
-	RepoDir             string
 	DBPath              string
 	FetchInterval       time.Duration
 	CheckInterval       time.Duration
@@ -22,7 +21,6 @@ type Config struct {
 func New() Config {
 	return Config{
 		ListenAddr:          getenv("LISTEN_ADDR", ":8080"),
-		RepoDir:             getenv("REPO_DIR", "./data/public-peers"),
 		DBPath:              getenv("DB_PATH", "./data/yggpeers.db"),
 		FetchInterval:       getDuration("FETCH_INTERVAL", 15*time.Minute),
 		CheckInterval:       getDuration("CHECK_INTERVAL", 5*time.Minute),

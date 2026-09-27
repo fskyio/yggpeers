@@ -32,14 +32,14 @@ func main() {
 	}
 	defer st.Close()
 
-	f := fetcher.New(cfg, st)
+	f := fetcher.New(st)
 	c := checker.New(cfg, st)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	log.Println("Fetching peer list...")
-	if err := f.FetchAndParse(); err != nil {
+	if err := f.FetchAndParse(ctx); err != nil {
 		log.Printf("fetch: %v", err)
 	}
 
@@ -62,7 +62,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		runEvery(ctx, cfg.FetchInterval, func() {
-			if err := f.FetchAndParse(); err != nil {
+			if err := f.FetchAndParse(ctx); err != nil {
 				log.Printf("fetch: %v", err)
 			}
 		})

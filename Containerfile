@@ -7,7 +7,7 @@ COPY . .
 RUN CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o /yggpeers ./cmd/yggpeers
 
 FROM alpine:latest
-RUN apk add --no-cache git ca-certificates
+RUN apk add --no-cache ca-certificates
 COPY --from=build /yggpeers /usr/local/bin/yggpeers
 EXPOSE 8080
 ENTRYPOINT ["yggpeers"]
