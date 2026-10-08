@@ -1,0 +1,125 @@
+{{define "peer.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>{{.Destination.Host}} — Yggdrasil Peer</title>
+	<link rel="stylesheet" href="/static/style.css">
+	{{if not .Detail.IsNetwork}}<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">{{end}}
+	<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+	<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+	<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+	<link rel="manifest" href="/static/site.webmanifest">
+</head>
+<body>
+	<header class="site-header">
+		<div class="site-header-inner">
+			<nav>
+				<a href="/">peers</a>
+				<a href="/stats">stats</a>
+				<a href="/map">map</a>
+				<a href="/api">api</a>
+				<span class="nav-spacer"></span>
+				<a href="/peers.json" class="export-btn">Export as JSON</a>
+				<a href="/peers.csv" class="export-btn">Export as CSV</a>
+			</nav>
+			<h1>Peer details</h1>
+		</div>
+	</header>
+	<main class="peer-page">
+		<p class="peer-back"><a href="/">← All peers</a></p>
+		<div class="address-copy"><code class="peer-uri">{{.Detail.URI}}</code>{{template "copy-button" .Detail.URI}}</div>
+		<div class="peer-overview">
+			<section class="peer-card">
+				<h2>Endpoint</h2>
+				<dl class="peer-fields">
+					<dt>Protocol</dt><dd>{{.Detail.Protocol}}</dd>
+					{{if .DestinationError}}<dt>Destination</dt><dd>Could not interpret this endpoint</dd>{{else}}
+					<dt>Destination</dt><dd><code>{{.Destination.Host}}</code></dd>
+					<dt>Port</dt><dd>{{.Destination.Port}}</dd>
+					{{if .Destination.ProxyHost}}<dt>Proxy</dt><dd><code>{{.Destination.ProxyHost}}</code> (port {{.Destination.ProxyPort}})</dd>{{end}}
+					{{end}}
+					<dt>{{if .Detail.IsNetwork}}Overlay network{{else}}Listed country{{end}}</dt><dd>{{.Detail.Country}}</dd>
+					<dt>Status</dt><dd class="peer-state {{.Status.Class}}">{{.Status.Label}}</dd>
+					<dt>Last checked</dt><dd>{{if .Detail.LastCheckedAt}}{{.Detail.LastCheckedAt.Format "2006-01-02 15:04:05 UTC"}}{{else}}No timestamp available{{end}}</dd>
+					<dt>7d check success</dt><dd>{{optpct .Detail.UptimePct}}</dd>
+				</dl>
+			</section>
+			{{if not .Detail.IsNetwork}}
+			<section class="peer-card peer-map-card">
+				<h2 class="peer-map-heading">{{.Detail.Country}} <a href="/map">World map</a></h2>
+				<div class="peer-map-wrap">
+					<div id="map" data-country="{{.Detail.Country}}" aria-label="Country map for {{.Detail.Country}}"></div>
+					<p id="map-status" role="status" hidden></p>
+					<p id="webgl-warning" hidden>WebGL is unavailable. <a href="/map">Open the country map</a>.</p>
+					<noscript><p class="peer-message">JavaScript is required to draw the map.</p></noscript>
+				</div>
+			</section>
+			{{end}}
+		</div>
+		<section class="peer-card">
+			<h2>Reachability history — 7 days</h2>
+			<div class="history-bar" role="group" aria-label="Hourly probe results, oldest to newest">
+				{{range $i, $hour := .Hours}}<button type="button" class="history-hour {{$hour.Class}}" tabindex="{{if eq $i 0}}0{{else}}-1{{end}}" title="{{$hour.Label}}" aria-label="{{$hour.Label}}" data-detail="{{$hour.Label}}"></button>{{end}}
+			</div>
+			<div class="history-range"><span>{{.Detail.WindowStart.Format "Jan 02 15:04 UTC"}}</span><span>{{.Detail.WindowEnd.Format "Jan 02 15:04 UTC"}}</span></div>
+			<ul class="history-legend">
+				<li><span class="history-key up"></span>All checks passed</li>
+				<li><span class="history-key down"></span>All checks failed</li>
+				<li><span class="history-key mixed"></span>Mixed results</li>
+				<li><span class="history-key unknown"></span>No observations</li>
+			</ul>
+			<p id="history-detail" class="history-detail" aria-live="polite">{{range $i, $hour := .Hours}}{{if eq $i 0}}{{$hour.Label}}{{end}}{{end}}</p>
+			<p class="peer-meta">{{.Detail.UpCount}} / {{.Detail.Checks}} checks passed in the last 168 hours.</p>
+			<details class="history-table">
+				<summary>Hourly check results</summary>
+				<div class="peer-table-scroll"><table class="peer-table">
+					<thead><tr><th scope="col">Hour starting (UTC)</th><th scope="col">Passed / checked</th><th scope="col">Result</th></tr></thead>
+					<tbody>{{range .Hours}}<tr><td>{{.Start.Format "2006-01-02 15:04:05"}}</td><td>{{.UpCount}} / {{.Checks}}</td><td>{{if eq .Class "unknown"}}No observations{{else if eq .Class "mixed"}}Mixed{{else if eq .Class "up"}}All passed{{else}}All failed{{end}}</td></tr>{{end}}</tbody>
+				</table></div>
+			</details>
+		</section>
+		<section class="peer-card">
+			<h2>Addresses &amp; autonomous systems</h2>
+			{{if .DestinationError}}
+			<p class="peer-message">Network metadata is unavailable because the destination could not be interpreted.</p>
+			{{else if not .NetworkApplicable}}
+			<p class="peer-message">Public DNS and ASN lookups do not apply to overlay or non-public addresses.</p>
+			{{else}}
+			{{if .ResolutionAvailable}}
+			<p class="peer-meta">DNS {{if .ResolutionFresh}}resolved{{else}}snapshot stale or unavailable{{end}}{{if not .Resolution.ResolvedAt.IsZero}} at {{.Resolution.ResolvedAt.Format "2006-01-02 15:04:05 UTC"}}{{end}}.{{if .Resolution.Error}} Lookup error: {{.Resolution.Error}}{{end}}</p>
+			{{end}}
+			{{if .Addresses}}
+			<div class="peer-table-scroll"><table class="peer-table network-table">
+				<thead><tr><th scope="col">IP address</th><th scope="col">Origin ASN / network</th><th scope="col">Lookup</th></tr></thead>
+				<tbody>{{range .Addresses}}<tr>
+					<td><div class="address-copy"><code>{{.IP}}</code>{{template "copy-button" .IP}}</div></td>
+					<td>{{if .Metadata.ASNs}}{{range .Metadata.ASNs}}<span class="asn">AS{{.}}</span> {{end}}{{if .Metadata.Name}}<br>{{.Metadata.Name}}{{end}}{{if .Metadata.Prefix}}<br><code>{{.Metadata.Prefix}}</code>{{end}}{{else if .Available}}No ASN data{{else}}Awaiting lookup{{end}}</td>
+					<td>{{if .Available}}{{if .Fresh}}Fresh{{else}}Stale or unavailable{{end}}{{if not .Metadata.LookedUpAt.IsZero}}<br>{{.Metadata.LookedUpAt.Format "2006-01-02 15:04 UTC"}}{{end}}{{if .Metadata.Error}}<br>{{.Metadata.Error}}{{end}}{{else}}Pending{{end}}</td>
+				</tr>{{end}}</tbody>
+			</table></div>
+			{{else}}<p class="peer-message">{{if .ResolutionAvailable}}No cached public IP addresses.{{else}}Awaiting background DNS lookup.{{end}}</p>{{end}}
+			{{end}}
+		</section>
+		<section class="peer-card">
+			<h2>Related endpoints <span class="count">({{len .Related}})</span></h2>
+			{{if .Related}}
+			<ul class="related-peers">{{range .Related}}<li>
+				<div class="address-copy"><a href="/peer/{{.Peer.ID}}"><code>{{.Peer.URI}}</code></a>{{template "copy-button" .Peer.URI}}</div>
+				<div class="related-meta"><span>{{.Peer.Protocol}} · port {{.Destination.Port}}</span><span class="peer-state {{.Status.Class}}">{{.Status.Label}}</span><span>{{.Reason}}</span></div>
+			</li>{{end}}</ul>
+			{{else}}<p class="peer-message">No other listed endpoints share this destination hostname or a fresh public IP.</p>{{end}}
+		</section>
+	</main>
+	<footer class="site-footer"><div class="site-footer-inner">
+		Viewed {{.UpdatedAt.Format "2006-01-02 15:04:05 UTC"}} · Data from <a href="https://github.com/yggdrasil-network/public-peers">yggdrasil-network/public-peers</a> · <a href="https://gitfield.org/fsky/yggpeers">Source code</a>
+	</div></footer>
+	<script src="/static/copy.js"></script>
+	<script src="/static/peer.js"></script>
+	{{if not .Detail.IsNetwork}}
+	<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+	<script src="/static/pmtiles-4.5.0.js"></script>
+	<script src="/static/map.js"></script>
+	{{end}}
+</body>
+</html>{{end}}

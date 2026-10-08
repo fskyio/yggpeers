@@ -3,6 +3,7 @@
 
 	var status = document.getElementById('map-status');
 	var buttons = document.querySelectorAll('.toggle-btn');
+	var peerCountry = document.getElementById('map').dataset.country || '';
 	function showStatus(message) {
 		status.textContent = message;
 		status.hidden = false;
@@ -21,8 +22,11 @@
 		}
 	}
 	if (!webglSupported()) {
-		document.getElementById('webgl-warning').style.display = 'block';
-		document.getElementById('legend').style.display = 'none';
+		var warning = document.getElementById('webgl-warning');
+		warning.hidden = false;
+		warning.style.display = 'block';
+		var legend = document.getElementById('legend');
+		if (legend) legend.style.display = 'none';
 		return;
 	}
 
@@ -81,8 +85,12 @@
 		center: [0, 30],
 		zoom: 2,
 		maxZoom: 12,
-		renderWorldCopies: false
+		renderWorldCopies: !!peerCountry,
+		cooperativeGestures: !!peerCountry,
 	});
+	if (peerCountry) {
+		map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+	}
 	map.on('error', function(e) {
 		console.error('Map load failed:', e.error);
 		showStatus('Some map boundaries could not be loaded. Please reload to try again.');
@@ -99,7 +107,8 @@
 	}
 
 	map.on('load', function() {
-		Promise.all([fetchJSON('/api/countries'), fetchJSON('/static/countries.json')]).then(function(results) {
+		Promise.all([peerCountry ? Promise.resolve(null) : fetchJSON('/api/countries'),
+			fetchJSON('/static/countries.json')]).then(function(results) {
 			var counts = results[0];
 			var countries = results[1];
 			var aliases = Object.create(null);
@@ -107,6 +116,18 @@
 			Object.keys(countries).forEach(function(code) {
 				countries[code].aliases.forEach(function(name) { aliases[normalize(name)] = code; });
 			});
+			if (peerCountry) {
+				var selectedCode = aliases[normalize(peerCountry)];
+				if (!selectedCode) {
+					showStatus('No map boundary is available for ' + peerCountry + '.');
+					return;
+				}
+				map.setPaintProperty('countries-fill', 'fill-color',
+					['case', ['==', ['get', 'code'], selectedCode], '#31a354', 'rgba(0,0,0,0)']);
+				var selectedCountry = countries[selectedCode];
+				map.fitBounds(selectedCountry.bounds, { padding: 24, maxZoom: 9, duration: 0 });
+				return;
+			}
 			Object.keys(counts).forEach(function(name) {
 				var code = aliases[normalize(name)];
 				if (!code) {
@@ -209,7 +230,8 @@
 			});
 		}).catch(function(error) {
 			console.error('Peer map data failed:', error);
-			showStatus('Peer counts could not be loaded. Please reload to try again.');
+			showStatus(peerCountry ? 'The country map could not be loaded. Please reload to try again.' :
+				'Peer counts could not be loaded. Please reload to try again.');
 		});
 	});
 })();

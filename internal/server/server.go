@@ -60,6 +60,7 @@ func (s *Server) routes() {
 		http.ServeFileFS(w, r, staticFS, "static/favicon.ico")
 	})
 	s.mux.HandleFunc("GET /{$}", s.index)
+	s.mux.HandleFunc("GET /peer/{id}", s.peerPage)
 	s.mux.HandleFunc("GET /stats", s.statsPage)
 	s.mux.HandleFunc("GET /stats/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/stats", http.StatusMovedPermanently)

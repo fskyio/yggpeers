@@ -56,6 +56,7 @@ type Peer struct {
 	IsUp           bool
 	IsNetwork      bool
 	StateChangedAt time.Time
+	LastCheckedAt  *time.Time
 }
 
 // PeerInput is the data fetcher passes to BulkUpsertPeers.
@@ -137,6 +138,7 @@ func New(path string) (*Store, error) {
 	db.SetMaxIdleConns(5)
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
+		db.Close()
 		return nil, err
 	}
 	// ANALYZE lets the planner pick the best index for the new
@@ -201,7 +203,13 @@ func (s *Store) migrate() error {
 	`); err != nil {
 		return err
 	}
-	return s.backfillDailyStats()
+	if err := s.migrateLastCheckedAt(); err != nil {
+		return err
+	}
+	if err := s.backfillDailyStats(); err != nil {
+		return err
+	}
+	return s.migrateMetadata()
 }
 
 // backfillDailyStats populates daily_peer_stats from the checks table the
@@ -286,7 +294,7 @@ func (s *Store) BulkUpsertPeers(peers []PeerInput) error {
 
 func (s *Store) GetAllPeers() ([]Peer, error) {
 	rows, err := s.db.Query(
-		`SELECT id, uri, country, protocol, host, port, is_up, is_network, state_changed_at FROM peers`,
+		`SELECT id, uri, country, protocol, host, port, is_up, is_network, state_changed_at, last_checked_at FROM peers`,
 	)
 	if err != nil {
 		return nil, err
@@ -296,7 +304,7 @@ func (s *Store) GetAllPeers() ([]Peer, error) {
 	for rows.Next() {
 		var p Peer
 		if err := rows.Scan(&p.ID, &p.URI, &p.Country, &p.Protocol,
-			&p.Host, &p.Port, &p.IsUp, &p.IsNetwork, &p.StateChangedAt); err != nil {
+			&p.Host, &p.Port, &p.IsUp, &p.IsNetwork, &p.StateChangedAt, &p.LastCheckedAt); err != nil {
 			return nil, err
 		}
 		peers = append(peers, p)
@@ -309,9 +317,9 @@ type CheckResult struct {
 	IsUp   bool
 }
 
-// RecordChecks inserts a row in `checks` for each result and updates the
-// peer's current state, bumping `state_changed_at` only when the up/down
-// state actually flips.
+// RecordChecks atomically records observations, daily totals, and current state.
+// The first observation establishes the state baseline; later observations only
+// move state_changed_at when the observed state changes.
 func (s *Store) RecordChecks(results []CheckResult) error {
 	if len(results) == 0 {
 		return nil
@@ -322,7 +330,10 @@ func (s *Store) RecordChecks(results []CheckResult) error {
 	}
 	defer tx.Rollback()
 
-	insertCheck, err := tx.Prepare(`INSERT INTO checks (peer_id, is_up) VALUES (?, ?)`)
+	now := time.Now().UTC()
+	checkedAt := now.Format("2006-01-02 15:04:05.999999999")
+	checkedDay := now.Format("2006-01-02")
+	insertCheck, err := tx.Prepare(`INSERT INTO checks (peer_id, checked_at, is_up) VALUES (?, ?, ?)`)
 	if err != nil {
 		return err
 	}
@@ -331,7 +342,8 @@ func (s *Store) RecordChecks(results []CheckResult) error {
 	updatePeer, err := tx.Prepare(`
 		UPDATE peers
 		SET is_up = ?,
-		    state_changed_at = CASE WHEN is_up != ? THEN datetime('now') ELSE state_changed_at END
+		    state_changed_at = CASE WHEN last_checked_at IS NULL OR is_up != ? THEN ? ELSE state_changed_at END,
+		    last_checked_at = ?
 		WHERE id = ?
 	`)
 	if err != nil {
@@ -343,7 +355,7 @@ func (s *Store) RecordChecks(results []CheckResult) error {
 	// aggregate the raw checks table at request time.
 	upsertDaily, err := tx.Prepare(`
 		INSERT INTO daily_peer_stats (peer_id, day, checks, up_count)
-		VALUES (?, DATE('now'), 1, ?)
+		VALUES (?, ?, 1, ?)
 		ON CONFLICT(peer_id, day) DO UPDATE SET
 			checks   = checks   + 1,
 			up_count = up_count + excluded.up_count
@@ -354,17 +366,17 @@ func (s *Store) RecordChecks(results []CheckResult) error {
 	defer upsertDaily.Close()
 
 	for _, r := range results {
-		if _, err := insertCheck.Exec(r.PeerID, r.IsUp); err != nil {
+		if _, err := insertCheck.Exec(r.PeerID, checkedAt, r.IsUp); err != nil {
 			return err
 		}
-		if _, err := updatePeer.Exec(r.IsUp, r.IsUp, r.PeerID); err != nil {
+		if _, err := updatePeer.Exec(r.IsUp, r.IsUp, checkedAt, checkedAt, r.PeerID); err != nil {
 			return err
 		}
 		up := 0
 		if r.IsUp {
 			up = 1
 		}
-		if _, err := upsertDaily.Exec(r.PeerID, up); err != nil {
+		if _, err := upsertDaily.Exec(r.PeerID, checkedDay, up); err != nil {
 			return err
 		}
 	}
@@ -406,7 +418,7 @@ func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
 	rows, err := s.db.Query(`
 		SELECT
 			p.id, p.uri, p.country, p.protocol, p.host, p.port,
-			p.is_up, p.is_network, p.state_changed_at,
+			p.is_up, p.is_network, p.state_changed_at, p.last_checked_at,
 			CASE WHEN COALESCE(SUM(d.checks), 0) = 0 THEN NULL
 			     ELSE CAST(SUM(d.up_count) AS REAL) / SUM(d.checks) * 100
 			END
@@ -427,7 +439,7 @@ func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
 		var p PeerWithStats
 		if err := rows.Scan(
 			&p.ID, &p.URI, &p.Country, &p.Protocol, &p.Host, &p.Port,
-			&p.IsUp, &p.IsNetwork, &p.StateChangedAt, &p.UptimePct,
+			&p.IsUp, &p.IsNetwork, &p.StateChangedAt, &p.LastCheckedAt, &p.UptimePct,
 		); err != nil {
 			return nil, err
 		}

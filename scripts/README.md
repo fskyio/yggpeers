@@ -2,7 +2,9 @@
 
 `internal/server/static/countries.pmtiles` contains Mapbox Vector Tiles (MVT) in a PMTiles v3 archive. It is served by the existing Go process with byte-range support, a content-derived ETag, and one-hour cache freshness. No separate tile server is needed.
 
-`countries.json` is a small catalog joining the API's country names to stable tile codes. ISO alpha-2 codes are used where available; other Natural Earth features use `NE:<ADM0_A3>`. Some remote features with the same ISO code are grouped together. Small places also have label coordinates and a zoom threshold: their marker disappears once the main land component spans roughly 14 pixels. Only places with peers in the selected Total/Online mode get markers.
+`countries.json` is a small catalog joining the API's country names to stable tile codes. ISO alpha-2 codes are used where available; other Natural Earth features use `NE:<ADM0_A3>`. Some remote features with the same ISO code are grouped together. Each entry also has `bounds: [[west, south], [east, north]]` for framing peer mini-maps around the dominant land component, without distant overseas islands expanding the view. Bounds omit the largest empty longitude arc; east may exceed 180 for antimeridian crossings, and latitude is clamped to ±85 degrees. Mini-maps fit these bounds with padding and offer zoom/pan controls.
+
+Small places also have label coordinates and a zoom threshold: their marker disappears once the main land component spans roughly 14 pixels. Only places with peers in the selected Total/Online mode get markers on the world map.
 
 The boundary source is Natural Earth v5.1.2, `ne_10m_admin_0_countries.geojson`, pinned to commit `f1890d9f152c896d250a77557a5751a93d494776` and verified by SHA-256 in `build-map.py`. It is public-domain data from [Natural Earth](https://www.naturalearthdata.com/), at 1:10 million scale (not 10-metre accuracy). The archive contains zooms 0–7; MapLibre reuses the most detailed tiles above zoom 7, up to the UI's zoom limit of 12. This avoids storing redundant higher-zoom tiles for the same source detail.
 
@@ -49,4 +51,4 @@ Example measured session with the bundled archive (decimal KB):
 | Move from Hong Kong to Singapore, zoom 8 | 3 KB |
 | Switch Total/Online without moving | 0 KB |
 
-The full archive is 4.93 MB on disk. The separate country catalog is 24 KB and the PMTiles reader is 20 KB; MapLibre's existing CDN assets are unchanged. Transfer sizes depend on viewport, cache state, and animation timing, so use the browser check to measure your deployment.
+The full archive is 4.93 MB on disk. The separate country catalog is 38 KB and the PMTiles reader is 20 KB; MapLibre's existing CDN assets are unchanged. Transfer sizes depend on viewport, cache state, and animation timing, so use the browser check to measure your deployment.

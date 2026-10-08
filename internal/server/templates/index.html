@@ -50,7 +50,7 @@
 			<h2>{{.Name}} <span class="count">({{len .Peers}})</span></h2>
 			{{range .Peers}}
 			<div class="peer {{if .IsUp}}up{{else}}down{{end}}">
-				<span class="uri">{{.URI}}</span>
+				<div class="address-copy"><a class="uri" href="/peer/{{.ID}}" title="{{.URI}}">{{.URI}}</a>{{template "copy-button" .URI}}</div>
 				<span class="status">{{status .}}</span>
 				<span class="uptime">{{uptime .UptimePct}}</span>
 			</div>
@@ -64,7 +64,7 @@
 			<h2>{{.Name}} <span class="count">({{len .Peers}})</span></h2>
 			{{range .Peers}}
 			<div class="peer">
-				<span class="uri">{{.URI}}</span>
+				<div class="address-copy"><a class="uri" href="/peer/{{.ID}}" title="{{.URI}}">{{.URI}}</a>{{template "copy-button" .URI}}</div>
 				{{if $.CheckDarknet}}
 				<span class="status">{{status .}}</span>
 				<span class="uptime">{{uptime .UptimePct}}</span>
@@ -85,6 +85,7 @@
 			<a href="https://gitfield.org/fsky/yggpeers">Source code</a>
 		</div>
 	</footer>
+	<script src="/static/copy.js"></script>
 </body>
 </html>
 {{end}}

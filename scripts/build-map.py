@@ -43,6 +43,42 @@ def main_extent(feature):
     return max(extents)
 
 
+def main_bounds(feature):
+    """Frame the largest projected land component, with compact dateline bounds."""
+    extents = []
+    for polygon in polygons(feature):
+        # Exterior rings alone define extents; holes cannot enlarge a component.
+        longitudes = sorted({lon % 360 for lon, _ in polygon[0]})
+        gaps = [(longitudes[(i + 1) % len(longitudes)] +
+                 (360 if i == len(longitudes) - 1 else 0) - lon, i)
+                for i, lon in enumerate(longitudes)]
+        _, gap_index = max(gaps)
+        # Omit the largest empty longitude arc. An east value over 180 explicitly
+        # represents a dateline crossing rather than a near-whole-world extent.
+        west = longitudes[(gap_index + 1) % len(longitudes)]
+        east = longitudes[gap_index]
+        if east < west:
+            east += 360
+        if west >= 180:
+            west -= 360
+            east -= 360
+        south = max(-85, min(85, min(lat for _, lat in polygon[0])))
+        north = max(-85, min(85, max(lat for _, lat in polygon[0])))
+
+        def projected_y(lat):
+            sin_lat = math.sin(math.radians(lat))
+            return 0.5 - math.log((1 + sin_lat) / (1 - sin_lat)) / (4 * math.pi)
+
+        width = (east - west) / 360
+        height = projected_y(south) - projected_y(north)
+        extents.append((width * height, max(width, height),
+                        [[west, south], [east, north]]))
+    # Match main_extent's bounding-rectangle area/span convention, not polygon
+    # area or a label position; overseas islands do not expand the mainland view.
+    bounds = max(extents, key=lambda extent: extent[:2])[2]
+    return [[round(value, 6) for value in corner] for corner in bounds]
+
+
 def prepare(data):
     # Include the app's canonical country names alongside Natural Earth's names.
     app_names = dict(re.findall(r'"([A-Z]{2})":\s*"([^"]+)"', (ROOT / "internal/fetcher/fetcher.go").read_text()))
@@ -67,6 +103,7 @@ def prepare(data):
         aliases.discard(None)
         aliases.discard("")
         countries[code] = {"name": name, "aliases": sorted(aliases)}
+        countries[code]["bounds"] = main_bounds(primary)
 
         # Use a marker until the largest land component spans about 14 pixels.
         extent = main_extent(primary)[1]

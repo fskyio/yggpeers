@@ -15,6 +15,7 @@ import (
 	"yggpeers/internal/checker"
 	"yggpeers/internal/config"
 	"yggpeers/internal/fetcher"
+	"yggpeers/internal/metadata"
 	"yggpeers/internal/server"
 	"yggpeers/internal/store"
 )
@@ -34,6 +35,7 @@ func main() {
 
 	f := fetcher.New(st)
 	c := checker.New(cfg, st)
+	enricher := metadata.New(st)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -44,7 +46,7 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 
 	go func() {
 		defer wg.Done()
@@ -66,6 +68,19 @@ func main() {
 				log.Printf("fetch: %v", err)
 			}
 		})
+	}()
+
+	go func() {
+		defer wg.Done()
+		refresh := func() {
+			if err := enricher.Refresh(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("metadata: %v", err)
+			}
+		}
+		refresh()
+		// Metadata has its own cache freshness. Refresh due hosts/IPs even
+		// when the upstream peer list is unchanged.
+		runEvery(ctx, time.Minute, refresh)
 	}()
 
 	srv, err := server.New(cfg, st)
