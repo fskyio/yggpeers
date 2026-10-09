@@ -12,16 +12,20 @@ type Config struct {
 	FetchInterval time.Duration
 	CheckInterval time.Duration
 	RoundTimeout  time.Duration
+	// YggdrasilAdmin is a local node's admin endpoint for NodeInfo lookups;
+	// empty disables them.
+	YggdrasilAdmin string
 }
 
 func New() Config {
 	interval := getDuration("CHECK_INTERVAL", 5*time.Minute)
 	return Config{
-		ListenAddr:    getenv("LISTEN_ADDR", ":8080"),
-		DBPath:        getenv("DB_PATH", "./data/yggpeers.db"),
-		FetchInterval: getDuration("FETCH_INTERVAL", 15*time.Minute),
-		CheckInterval: interval,
-		RoundTimeout:  getDuration("ROUND_TIMEOUT", interval*4/5),
+		ListenAddr:     getenv("LISTEN_ADDR", ":8080"),
+		DBPath:         getenv("DB_PATH", "./data/yggpeers.db"),
+		FetchInterval:  getDuration("FETCH_INTERVAL", 15*time.Minute),
+		CheckInterval:  interval,
+		RoundTimeout:   getDuration("ROUND_TIMEOUT", interval*4/5),
+		YggdrasilAdmin: os.Getenv("YGGDRASIL_ADMIN"),
 	}
 }
 

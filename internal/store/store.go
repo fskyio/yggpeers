@@ -67,6 +67,10 @@ type Peer struct {
 	ReportingProbes  int
 	ExpectedProbes   int
 	RegisteredProbes int
+	// Identity from the latest successful handshake; empty until one arrives.
+	NodeKey         string
+	ProtocolVersion string
+	NodeSeenAt      *time.Time
 }
 
 // PeerInput is the data fetcher passes to BulkUpsertPeers.
@@ -160,6 +164,10 @@ func New(path string) (*Store, error) {
 		return nil, err
 	}
 	if err := s.migrateProbes(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.migrateNodes(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -451,7 +459,7 @@ func (s *Store) GetAllPeers() ([]Peer, error) {
 		SELECT p.id, p.uri, p.country, p.protocol, p.host, p.port,
 			`+effectiveStatusSQL+`, p.is_network, p.state_changed_at, p.last_checked_at,
 			p.status_valid_until, p.last_round_id, p.successful_probes,
-			p.reporting_probes, p.expected_probes, p.registered_probes
+			p.reporting_probes, p.expected_probes, p.registered_probes, `+peerNodeColumns+`
 		FROM peers p`, sqliteTime(now))
 	if err != nil {
 		return nil, err
@@ -463,7 +471,8 @@ func (s *Store) GetAllPeers() ([]Peer, error) {
 		if err := rows.Scan(&p.ID, &p.URI, &p.Country, &p.Protocol,
 			&p.Host, &p.Port, &p.Status, &p.IsNetwork, &p.StateChangedAt, &p.LastCheckedAt,
 			&p.StatusValidUntil, &p.LastRoundID, &p.SuccessfulProbes,
-			&p.ReportingProbes, &p.ExpectedProbes, &p.RegisteredProbes); err != nil {
+			&p.ReportingProbes, &p.ExpectedProbes, &p.RegisteredProbes,
+			&p.NodeKey, &p.ProtocolVersion, &p.NodeSeenAt); err != nil {
 			return nil, err
 		}
 		peers = append(peers, p)
@@ -524,7 +533,7 @@ func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
 			p.id, p.uri, p.country, p.protocol, p.host, p.port,
 			`+effectiveStatusSQL+` AS effective_status, p.is_network, p.state_changed_at, p.last_checked_at,
 			p.status_valid_until, p.last_round_id, p.successful_probes,
-			p.reporting_probes, p.expected_probes, p.registered_probes,
+			p.reporting_probes, p.expected_probes, p.registered_probes, `+peerNodeColumns+`,
 			CAST(SUM(d.up_count) AS REAL) / NULLIF(SUM(d.checks), 0) * 100,
 			CAST(SUM(d.checks) AS REAL) / NULLIF(SUM(d.checks + d.unknown_count), 0) * 100
 		FROM peers p
@@ -547,6 +556,7 @@ func (s *Store) GetPeersWithStats(windowDays int) ([]PeerWithStats, error) {
 			&p.Status, &p.IsNetwork, &p.StateChangedAt, &p.LastCheckedAt,
 			&p.StatusValidUntil, &p.LastRoundID, &p.SuccessfulProbes,
 			&p.ReportingProbes, &p.ExpectedProbes, &p.RegisteredProbes,
+			&p.NodeKey, &p.ProtocolVersion, &p.NodeSeenAt,
 			&p.UptimePct, &p.CoveragePct,
 		); err != nil {
 			return nil, err

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,31 @@ func TestMatchingPeersUsesSOCKSDestinationNotProxy(t *testing.T) {
 	}
 	if got[0].Destination.Port != "4567" {
 		t.Errorf("related port = %q, want destination port", got[0].Destination.Port)
+	}
+}
+
+func TestMatchingPeersRelatesSameNodeAcrossNetworks(t *testing.T) {
+	key, other := strings.Repeat("ab", 32), strings.Repeat("cd", 32)
+	selected := store.Peer{ID: 1, URI: "tcp://alpha.example.com:1234", NodeKey: key}
+	destination, err := endpoint.Parse(selected.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peers := []store.PeerWithStats{
+		{Peer: selected},
+		{Peer: store.Peer{ID: 2, URI: "socks://localhost:9050/first.onion:1234", IsNetwork: true, NodeKey: key}},
+		{Peer: store.Peer{ID: 3, URI: "tcp://beta.example.com:1234", NodeKey: key}},
+		{Peer: store.Peer{ID: 4, URI: "tcp://gamma.example.com:1234", NodeKey: other}},
+		{Peer: store.Peer{ID: 5, URI: "tcp://delta.example.com:1234"}},
+	}
+	got := matchingPeers(selected, destination, peers, nil, time.Now())
+	if len(got) != 2 || got[0].Peer.ID != 2 || got[1].Peer.ID != 3 || got[0].Reason != got[1].Reason {
+		t.Fatalf("same-node relations = %+v", got)
+	}
+	// Peers without a reported key never match each other by key.
+	unkeyed := store.Peer{ID: 5, URI: "tcp://delta.example.com:1234"}
+	if got := matchingPeers(unkeyed, endpoint.Destination{Host: "delta.example.com"}, peers, nil, time.Now()); len(got) != 0 {
+		t.Fatalf("unkeyed relations = %+v", got)
 	}
 }
 

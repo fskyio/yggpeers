@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,6 +133,43 @@ func TestRoundDeadlinesAndImmutableObservations(t *testing.T) {
 	detail, err := st.GetPeerDetail(id, work.Deadline.Add(time.Second))
 	if err != nil || detail.Status != protocol.Unknown || detail.UnknownCount != 1 || detail.UpCount != 0 {
 		t.Fatalf("late success changed incomplete round: %+v, %v", detail, err)
+	}
+}
+
+func TestHandshakeIdentityFromLatestSuccess(t *testing.T) {
+	st, probes, id := roundFixture(t, 2, false)
+	work := assignmentFor(t, st, probes[0], roundTestTime)
+	key := strings.Repeat("ab", 32)
+	report := func(r protocol.Result) protocol.ReportRequest {
+		return protocol.ReportRequest{RoundID: work.RoundID, Results: []protocol.Result{r}}
+	}
+	for _, invalid := range []protocol.Result{
+		{PeerID: id, Status: protocol.Down, Key: key, ProtocolVersion: "0.5"},
+		{PeerID: id, Status: protocol.Up, Key: strings.ToUpper(key), ProtocolVersion: "0.5"},
+		{PeerID: id, Status: protocol.Up, Key: key},
+	} {
+		if _, err := st.SubmitProbeResults(probes[0].ID, report(invalid), roundTestTime); !errors.Is(err, ErrInvalidReport) {
+			t.Fatalf("%+v accepted: %v", invalid, err)
+		}
+	}
+	seen := roundTestTime.Add(time.Second)
+	up := protocol.Result{PeerID: id, Status: protocol.Up, Key: key, ProtocolVersion: "0.5"}
+	if n, err := st.SubmitProbeResults(probes[0].ID, report(up), seen); err != nil || n != 1 {
+		t.Fatalf("accepted %d, error %v", n, err)
+	}
+	if n, err := st.SubmitProbeResults(probes[0].ID, report(up), seen.Add(time.Second)); err != nil || n != 0 {
+		t.Fatalf("identical retry accepted %d, error %v", n, err)
+	}
+	other := up
+	other.Key = strings.Repeat("cd", 32)
+	if _, err := st.SubmitProbeResults(probes[0].ID, report(other), seen.Add(time.Second)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("retry with another key error = %v", err)
+	}
+	// A probe that predates handshake reporting must not erase the identity.
+	sendObservation(t, st, probes[1], assignmentFor(t, st, probes[1], seen).RoundID, id, protocol.Up, seen.Add(2*time.Second))
+	detail, err := st.GetPeerDetail(id, seen.Add(3*time.Second))
+	if err != nil || detail.NodeKey != key || detail.ProtocolVersion != "0.5" || detail.NodeSeenAt == nil || !detail.NodeSeenAt.Equal(seen) {
+		t.Fatalf("identity = %q %q %v, error %v", detail.NodeKey, detail.ProtocolVersion, detail.NodeSeenAt, err)
 	}
 }
 

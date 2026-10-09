@@ -9,11 +9,14 @@ import (
 	"net/netip"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"yggpeers/internal/protocol"
 	"yggpeers/internal/store"
+	"yggpeers/internal/ygg"
 )
 
 type fakeResolver struct {
@@ -64,7 +67,7 @@ func metadataFixture(t *testing.T, peers []store.PeerInput) (*Enricher, *fakeRes
 	}
 	r := newFakeResolver()
 	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	e := New(s)
+	e := New(s, nil)
 	e.resolver, e.now = r, func() time.Time { return now }
 	return e, r, &now
 }
@@ -119,7 +122,7 @@ func TestRefreshDeduplicatesDestinationsAndExcludesSensitiveTargets(t *testing.T
 	}
 	// Fresh persisted snapshots suppress all network calls even after replacing
 	// the Enricher (the cache is not tied to upstream archive modifications).
-	restarted := New(e.store)
+	restarted := New(e.store, nil)
 	restarted.resolver, restarted.now = r, e.now
 	if err := restarted.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
@@ -342,5 +345,82 @@ func TestRefreshBoundsConcurrencyAndCancelsWithoutPoisoningSnapshots(t *testing.
 	hosts, err := e.store.GetHostMetadataAll()
 	if err != nil || len(hosts) != 0 {
 		t.Fatalf("shutdown poisoned persisted snapshots: %v, %v", hosts, err)
+	}
+}
+
+type fakeNodes struct {
+	mu    sync.Mutex
+	info  map[string]ygg.NodeInfo
+	errs  map[string]error
+	calls map[string]int
+}
+
+func (f *fakeNodes) NodeInfo(ctx context.Context, key string) (ygg.NodeInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls[key]++
+	if _, ok := ctx.Deadline(); !ok {
+		return ygg.NodeInfo{}, errors.New("missing lookup deadline")
+	}
+	return f.info[key], f.errs[key]
+}
+
+// observeKeys reports a successful handshake with the given key for each URI.
+func observeKeys(t *testing.T, s *store.Store, now time.Time, keys map[string]string) {
+	t.Helper()
+	p, _, err := s.CreateProbe("probe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CheckInProbe(p.ID, false, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AdvanceProbeRounds(now, 10*time.Minute, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	work, err := s.CheckInProbe(p.ID, false, now)
+	if err != nil || work == nil {
+		t.Fatalf("assignment = %v, %v", work, err)
+	}
+	report := protocol.ReportRequest{RoundID: work.RoundID}
+	for _, target := range work.Targets {
+		report.Results = append(report.Results, protocol.Result{PeerID: target.PeerID, Status: protocol.Up, Key: keys[target.URI], ProtocolVersion: "0.5"})
+	}
+	if _, err := s.SubmitProbeResults(p.ID, report, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRefreshFetchesNodeInfoPerObservedKey(t *testing.T) {
+	tcp, tls, other := "tcp://192.0.2.1:1", "tls://192.0.2.1:2", "tcp://192.0.2.2:1"
+	e, _, now := metadataFixture(t, []store.PeerInput{peer(tcp), peer(tls), peer(other)})
+	shared, unreachable := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
+	observeKeys(t, e.store, *now, map[string]string{tcp: shared, tls: shared, other: unreachable})
+	nodes := &fakeNodes{
+		info:  map[string]ygg.NodeInfo{shared: {BuildName: "yggdrasil", BuildVersion: "0.5.14", BuildPlatform: "linux", BuildArch: "amd64"}},
+		errs:  map[string]error{unreachable: errors.New("timed out waiting for response")},
+		calls: make(map[string]int),
+	}
+	e.nodes = nodes
+	if err := e.Refresh(context.Background()); err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("refresh error = %v", err)
+	}
+	if nodes.calls[shared] != 1 || nodes.calls[unreachable] != 1 {
+		t.Fatalf("lookups = %v, want one per key", nodes.calls)
+	}
+	got, err := e.store.GetNodeMetadata(shared)
+	if err != nil || got.BuildVersion != "0.5.14" || got.BuildArch != "amd64" || !got.FetchedAt.Equal(*now) || !got.ExpiresAt.Equal(now.Add(nodeFreshness)) {
+		t.Fatalf("snapshot = %+v, %v", got, err)
+	}
+	failed, err := e.store.GetNodeMetadata(unreachable)
+	if err != nil || failed.Error == "" || !failed.FetchedAt.IsZero() || !failed.NextAttemptAt.Equal(now.Add(nodeRetryDelay)) {
+		t.Fatalf("failure = %+v, %v", failed, err)
+	}
+	*now = now.Add(nodeRetryDelay)
+	if err := e.Refresh(context.Background()); err == nil {
+		t.Fatal("retry of the unreachable node did not fail")
+	}
+	if nodes.calls[shared] != 1 || nodes.calls[unreachable] != 2 {
+		t.Fatalf("lookups after retry delay = %v; fresh snapshots must not be refetched", nodes.calls)
 	}
 }

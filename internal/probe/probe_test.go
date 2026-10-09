@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -15,25 +16,59 @@ import (
 
 	"yggpeers/internal/config"
 	"yggpeers/internal/protocol"
+	"yggpeers/internal/ygg"
 )
 
 func workerConfig(serverURL string) config.ProbeConfig {
 	return config.ProbeConfig{ServerURL: serverURL, Token: "test-credential", DialTimeout: time.Second, MaxConcurrentChecks: 1}
 }
 
-func workerTarget(t *testing.T, peer *httptest.Server, id int64) protocol.Target {
+// fakePeer is a Yggdrasil TCP listener. A silent peer accepts links but never
+// sends its handshake, so checks of it last until their deadline.
+type fakePeer struct {
+	net.Listener
+	accepted atomic.Int32
+}
+
+func newFakePeer(t *testing.T, silent bool) *fakePeer {
 	t.Helper()
-	host, port, err := net.SplitHostPort(peer.Listener.Addr().String())
+	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	handshake, err := ygg.Metadata{MinorVersion: 5, PublicKey: key.Public().(ed25519.PublicKey)}.Encode(key, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return protocol.Target{PeerID: id, Protocol: "ws", Host: host, Port: port}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	p := &fakePeer{Listener: ln}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			p.accepted.Add(1)
+			go func() {
+				defer conn.Close()
+				if !silent {
+					conn.Write(handshake)
+				}
+				io.Copy(io.Discard, conn)
+			}()
+		}
+	}()
+	return p
+}
+
+func (p *fakePeer) target(id int64) protocol.Target {
+	return protocol.Target{PeerID: id, Protocol: "tcp", URI: "tcp://" + p.Addr().String()}
 }
 
 func TestWorkerRetriesSameObservationAfterAmbiguousUpload(t *testing.T) {
-	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }))
-	defer peer.Close()
-	target := workerTarget(t, peer, 17)
+	peer := newFakePeer(t, false)
+	target := peer.target(17)
 	uploads := make(chan []byte, 4)
 	var attempts atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,12 +133,7 @@ func TestWorkerRetriesSameObservationAfterAmbiguousUpload(t *testing.T) {
 }
 
 func TestExpiredAssignmentLeavesUnfinishedTargetsMissing(t *testing.T) {
-	var checked atomic.Int32
-	peer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		checked.Add(1)
-		<-r.Context().Done()
-	}))
-	defer peer.Close()
+	peer := newFakePeer(t, true)
 	var uploaded atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		uploaded.Add(1)
@@ -117,13 +147,13 @@ func TestExpiredAssignmentLeavesUnfinishedTargetsMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	assignment := protocol.Assignment{RoundID: 1, Deadline: time.Now().Add(500 * time.Millisecond), Targets: []protocol.Target{
-		workerTarget(t, peer, 1), workerTarget(t, peer, 2),
+		peer.target(1), peer.target(2),
 	}}
 	if err := worker.execute(context.Background(), assignment); err != nil {
 		t.Fatal(err)
 	}
-	if checked.Load() != 1 || uploaded.Load() != 0 {
-		t.Fatalf("unfinished targets must stay missing: checked=%d uploads=%d", checked.Load(), uploaded.Load())
+	if checked := peer.accepted.Load(); checked != 1 || uploaded.Load() != 0 {
+		t.Fatalf("unfinished targets must stay missing: checked=%d uploads=%d", checked, uploaded.Load())
 	}
 }
 
@@ -161,10 +191,8 @@ func TestAuthenticationRejectionStopsWorker(t *testing.T) {
 }
 
 func TestCompletedObservationUploadsWhileSiblingCheckIsPending(t *testing.T) {
-	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) }))
-	defer fast.Close()
-	slow := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
-	defer slow.Close()
+	fast := newFakePeer(t, false)
+	slow := newFakePeer(t, true)
 	deadline := time.Now().Add(time.Second)
 	accepted := make(chan protocol.Result, 2)
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -193,7 +221,7 @@ func TestCompletedObservationUploadsWhileSiblingCheckIsPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	assignment := protocol.Assignment{RoundID: 1, Deadline: deadline, Targets: []protocol.Target{
-		workerTarget(t, fast, 1), workerTarget(t, slow, 2),
+		fast.target(1), slow.target(2),
 	}}
 	if err := worker.execute(context.Background(), assignment); err != nil {
 		t.Fatal(err)
@@ -203,7 +231,7 @@ func TestCompletedObservationUploadsWhileSiblingCheckIsPending(t *testing.T) {
 	for result := range accepted {
 		got = append(got, result)
 	}
-	if len(got) != 1 || got[0] != (protocol.Result{PeerID: 1, Status: protocol.Up}) {
+	if len(got) != 1 || got[0].PeerID != 1 || got[0].Status != protocol.Up {
 		t.Fatalf("accepted before deadline = %+v, want only the completed success", got)
 	}
 }

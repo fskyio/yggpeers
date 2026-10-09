@@ -1,5 +1,5 @@
-// Package metadata refreshes persisted destination snapshots independently of
-// archive updates. HTTP handlers only read those snapshots; they never resolve.
+// Package metadata refreshes persisted destination and node snapshots
+// independently of archive updates. HTTP handlers only read those snapshots.
 package metadata
 
 import (
@@ -14,6 +14,7 @@ import (
 
 	"yggpeers/internal/endpoint"
 	"yggpeers/internal/store"
+	"yggpeers/internal/ygg"
 )
 
 const (
@@ -23,6 +24,10 @@ const (
 	retryDelay        = time.Minute
 	lookupTimeout     = 5 * time.Second
 	maxLookups        = 8
+	nodeFreshness     = 24 * time.Hour
+	// Unanswered NodeInfo requests each hold an admin socket call for seconds.
+	nodeRetryDelay    = 15 * time.Minute
+	nodeLookupTimeout = 10 * time.Second
 )
 
 // net.Resolver does not expose DNS TTLs. These are application freshness
@@ -32,15 +37,26 @@ type dnsResolver interface {
 	LookupTXT(context.Context, string) ([]string, error)
 }
 
+// nodeInfoSource fetches NodeInfo through a local Yggdrasil node.
+type nodeInfoSource interface {
+	NodeInfo(ctx context.Context, key string) (ygg.NodeInfo, error)
+}
+
 type Enricher struct {
 	store     *store.Store
 	resolver  dnsResolver
+	nodes     nodeInfoSource // nil disables NodeInfo lookups
 	now       func() time.Time
 	refreshMu sync.Mutex
 }
 
-func New(s *store.Store) *Enricher {
-	return &Enricher{store: s, resolver: &net.Resolver{PreferGo: true}, now: time.Now}
+// New refreshes DNS and ASN snapshots, plus NodeInfo when admin is non-nil.
+func New(s *store.Store, admin *ygg.Admin) *Enricher {
+	e := &Enricher{store: s, resolver: &net.Resolver{PreferGo: true}, now: time.Now}
+	if admin != nil {
+		e.nodes = admin
+	}
+	return e
 }
 
 func (e *Enricher) Refresh(ctx context.Context) error {
@@ -176,9 +192,66 @@ func (e *Enricher) Refresh(ctx context.Context) error {
 		}
 		recordError(e.store.SaveIPMetadata(m))
 	})
+	if e.nodes != nil {
+		recordError(e.refreshNodes(ctx, peers))
+	}
 	if ctx.Err() != nil {
 		refreshErrors = append(refreshErrors, ctx.Err())
 	}
+	return errors.Join(refreshErrors...)
+}
+
+// refreshNodes keeps NodeInfo for every key a probe has seen on a listed peer.
+func (e *Enricher) refreshNodes(ctx context.Context, peers []store.Peer) error {
+	nodes, err := e.store.GetNodeMetadataAll()
+	if err != nil {
+		return err
+	}
+	keys := make(map[string]struct{})
+	for _, p := range peers {
+		if p.NodeKey != "" {
+			keys[p.NodeKey] = struct{}{}
+		}
+	}
+	now := e.now().UTC()
+	var errorsMu sync.Mutex
+	var refreshErrors []error
+	recordError := func(err error) {
+		if err != nil {
+			errorsMu.Lock()
+			refreshErrors = append(refreshErrors, err)
+			errorsMu.Unlock()
+		}
+	}
+	e.parallel(ctx, sortedKeys(keys), func(key string) {
+		m := nodes[key]
+		if !refreshDue(now, m.FetchedAt, m.ExpiresAt, m.NextAttemptAt, m.Error) {
+			return
+		}
+		m.Key = key
+		lookupCtx, cancel := context.WithTimeout(ctx, nodeLookupTimeout)
+		info, err := e.nodes.NodeInfo(lookupCtx, key)
+		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		at := e.now().UTC()
+		if err != nil {
+			m.Error = err.Error()
+			m.NextAttemptAt = at.Add(nodeRetryDelay)
+			if m.ExpiresAt.After(at) {
+				m.ExpiresAt = at
+			}
+			recordError(fmt.Errorf("NodeInfo %s: %w", key, err))
+		} else {
+			m.BuildName, m.BuildVersion, m.BuildPlatform, m.BuildArch = info.BuildName, info.BuildVersion, info.BuildPlatform, info.BuildArch
+			m.FetchedAt = at
+			m.ExpiresAt = at.Add(nodeFreshness)
+			m.NextAttemptAt = m.ExpiresAt
+			m.Error = ""
+		}
+		recordError(e.store.SaveNodeMetadata(m))
+	})
 	return errors.Join(refreshErrors...)
 }
 

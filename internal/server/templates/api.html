@@ -191,7 +191,7 @@
 		<section class="api-section">
 			<h2>Notes</h2>
 			<ul class="api-notes">
-				<li>Distributed probes check reachability in scheduled rounds. <code>up</code> requires at least one success; <code>down</code> requires all eligible reports to be failures. Missing reports and expired measurements are <code>unknown</code>.</li>
+				<li>Distributed probes check reachability in scheduled rounds. A check succeeds only when the peer URI answers with a valid Yggdrasil handshake matching any <code>key</code> pin. <code>up</code> requires at least one success; <code>down</code> requires all eligible reports to be failures. Missing reports and expired measurements are <code>unknown</code>.</li>
 				<li>The <code>uptime_pct</code> field excludes unknown rounds. <code>coverage_pct</code> includes them in its denominator. Legacy history is single-location data without per-probe attribution.</li>
 				<li><code>registered_probes</code> is frozen for the round. <code>expected_probes</code> excludes probes ineligible for that peer; <code>reporting_probes</code> counts received eligible reports. See the peer page for regional successes, failures, and missing reports.</li>
 				<li>Peers listed with <code>is_network: true</code> are hosted inside overlay networks (e.g. accessed via another Yggdrasil node) and may not be reachable from the public internet.</li>

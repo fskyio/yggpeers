@@ -59,6 +59,19 @@
 			</section>
 			{{end}}
 		</div>
+		<section class="peer-card">
+			<h2>Yggdrasil node</h2>
+			{{if .Detail.NodeKey}}
+			<dl class="peer-fields">
+				<dt>Public key</dt><dd><div class="address-copy"><code>{{.Detail.NodeKey}}</code>{{template "copy-button" .Detail.NodeKey}}</div></dd>
+				<dt>Address</dt><dd><div class="address-copy"><code>{{.Node.Address}}</code>{{template "copy-button" .Node.Address}}</div></dd>
+				<dt>Protocol version</dt><dd>{{.Detail.ProtocolVersion}}</dd>
+				{{if .Node.NodeInfoEnabled}}<dt>Software</dt><dd>{{.Node.Software}}{{with .Node.SoftwareNote}}<br><small>{{.}}</small>{{end}}</dd>{{end}}
+				<dt>Handshake received (server)</dt><dd>{{.Detail.NodeSeenAt.Format "2006-01-02 15:04:05 UTC"}}</dd>
+			</dl>
+			<p class="peer-meta">From the latest successful probe handshake on this endpoint. The address is derived from the public key.</p>
+			{{else}}<p class="peer-message">No probe has reported a Yggdrasil handshake from this endpoint yet.</p>{{end}}
+		</section>
 		<section class="peer-card probe-coverage">
 			<h2>Distributed probe results</h2>
 			{{if .Coverage.RoundID}}
@@ -133,7 +146,7 @@
 				<div class="address-copy"><a href="/peer/{{.Peer.ID}}"><code>{{.Peer.URI}}</code></a>{{template "copy-button" .Peer.URI}}</div>
 				<div class="related-meta"><span>{{.Peer.Protocol}} · port {{.Destination.Port}}</span><span class="peer-state {{.Status.Class}}">{{.Status.Label}}</span><span>{{.Reason}}</span></div>
 			</li>{{end}}</ul>
-			{{else}}<p class="peer-message">No other listed endpoints share this destination hostname or a fresh public IP.</p>{{end}}
+			{{else}}<p class="peer-message">No other listed endpoints share this node's public key, destination hostname or a fresh public IP.</p>{{end}}
 		</section>
 	</main>
 	<footer class="site-footer"><div class="site-footer-inner">

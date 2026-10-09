@@ -87,7 +87,7 @@ func (s *Store) GetPeerDetail(id int64, now time.Time) (PeerDetail, error) {
 		SELECT p.id, p.uri, p.country, p.protocol, p.host, p.port,
 			p.status, p.is_network, p.state_changed_at, p.last_checked_at,
 			p.status_valid_until, p.last_round_id, p.successful_probes,
-			p.reporting_probes, p.expected_probes, p.registered_probes,
+			p.reporting_probes, p.expected_probes, p.registered_probes, `+peerNodeColumns+`,
 			CAST(SUM(d.up_count) AS REAL) / NULLIF(SUM(d.checks), 0) * 100,
 			CAST(SUM(d.checks) AS REAL) / NULLIF(SUM(d.checks + d.unknown_count), 0) * 100
 		FROM peers p
@@ -101,6 +101,7 @@ func (s *Store) GetPeerDetail(id int64, now time.Time) (PeerDetail, error) {
 		&detail.StateChangedAt, &detail.LastCheckedAt,
 		&detail.StatusValidUntil, &detail.LastRoundID, &detail.SuccessfulProbes,
 		&detail.ReportingProbes, &detail.ExpectedProbes, &detail.RegisteredProbes,
+		&detail.NodeKey, &detail.ProtocolVersion, &detail.NodeSeenAt,
 		&detail.UptimePct, &detail.CoveragePct,
 	)
 	if err != nil {

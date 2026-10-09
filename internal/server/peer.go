@@ -2,18 +2,22 @@ package server
 
 import (
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"yggpeers/internal/endpoint"
 	"yggpeers/internal/protocol"
 	"yggpeers/internal/store"
+	"yggpeers/internal/ygg"
 )
 
 type peerStatus struct {
@@ -42,6 +46,34 @@ type relatedPeer struct {
 	Status      peerStatus
 }
 
+// peerNode presents the identity from the endpoint's latest handshake.
+type peerNode struct {
+	Address         string
+	NodeInfoEnabled bool
+	Software        string
+	SoftwareNote    string
+}
+
+func nodeSoftware(m store.NodeMetadata, available bool) (software, note string) {
+	switch {
+	case !available:
+		return "Awaiting NodeInfo lookup", ""
+	case m.FetchedAt.IsZero():
+		software = "Unavailable"
+	case m.BuildName == "" && m.BuildVersion == "":
+		software = "Not published (NodeInfo privacy)"
+	default:
+		software = strings.TrimSpace(m.BuildName + " " + m.BuildVersion)
+		if m.BuildPlatform != "" || m.BuildArch != "" {
+			software += " (" + m.BuildPlatform + "/" + m.BuildArch + ")"
+		}
+	}
+	if m.Error != "" {
+		return software, "Last NodeInfo lookup failed: " + m.Error
+	}
+	return software, "NodeInfo fetched " + m.FetchedAt.Format("2006-01-02 15:04 UTC")
+}
+
 type peerPageData struct {
 	Detail              store.PeerDetail
 	Destination         endpoint.Destination
@@ -55,6 +87,7 @@ type peerPageData struct {
 	NetworkApplicable   bool
 	Addresses           []peerAddress
 	Related             []relatedPeer
+	Node                peerNode
 	UpdatedAt           time.Time
 }
 
@@ -125,6 +158,8 @@ func destinationAddresses(d endpoint.Destination, hosts map[string]store.HostMet
 	return m.Addresses
 }
 
+// matchingPeers relates endpoints that verifiably reach the same node, or share
+// a destination. A shared key spans overlay and public endpoints.
 func matchingPeers(selected store.Peer, destination endpoint.Destination, peers []store.PeerWithStats, hosts map[string]store.HostMetadata, now time.Time) []relatedPeer {
 	var addresses []string
 	if !selected.IsNetwork {
@@ -132,7 +167,7 @@ func matchingPeers(selected store.Peer, destination endpoint.Destination, peers 
 	}
 	var related []relatedPeer
 	for _, p := range peers {
-		if p.ID == selected.ID || p.IsNetwork != selected.IsNetwork {
+		if p.ID == selected.ID {
 			continue
 		}
 		d, err := endpoint.Parse(p.URI)
@@ -140,20 +175,15 @@ func matchingPeers(selected store.Peer, destination endpoint.Destination, peers 
 			continue
 		}
 		reason := ""
-		if d.Host == destination.Host {
+		switch {
+		case selected.NodeKey != "" && p.NodeKey == selected.NodeKey:
+			reason = "Same Yggdrasil node (public key)"
+		case p.IsNetwork != selected.IsNetwork:
+		case d.Host == destination.Host:
 			reason = "Same destination hostname/IP"
-		} else if !p.IsNetwork && len(addresses) > 0 {
-			candidate := destinationAddresses(d, hosts, now)
-			for _, ip := range addresses {
-				for _, other := range candidate {
-					if ip == other {
-						reason = "Shared IP: " + ip
-						break
-					}
-				}
-				if reason != "" {
-					break
-				}
+		case !p.IsNetwork && len(addresses) > 0:
+			if ip := sharedAddress(addresses, destinationAddresses(d, hosts, now)); ip != "" {
+				reason = "Shared IP: " + ip
 			}
 		}
 		if reason != "" {
@@ -162,6 +192,15 @@ func matchingPeers(selected store.Peer, destination endpoint.Destination, peers 
 	}
 	sort.Slice(related, func(i, j int) bool { return related[i].Peer.URI < related[j].Peer.URI })
 	return related
+}
+
+func sharedAddress(addresses, candidates []string) string {
+	for _, ip := range addresses {
+		if slices.Contains(candidates, ip) {
+			return ip
+		}
+	}
+	return ""
 }
 
 func (s *Server) peerPage(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +229,18 @@ func (s *Server) peerPage(w http.ResponseWriter, r *http.Request) {
 	data := peerPageData{
 		Detail: detail, Status: observedStatus(detail.Peer, now), Coverage: coverage,
 		Hours: historyCells(detail.Hours), UpdatedAt: now,
+	}
+	if key, err := hex.DecodeString(detail.NodeKey); err == nil && len(key) > 0 {
+		data.Node.Address = ygg.AddressForKey(key).String()
+		if data.Node.NodeInfoEnabled = s.cfg.YggdrasilAdmin != ""; data.Node.NodeInfoEnabled {
+			m, err := s.store.GetNodeMetadata(detail.NodeKey)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				log.Printf("GetNodeMetadata: %v", err)
+				return
+			}
+			data.Node.Software, data.Node.SoftwareNote = nodeSoftware(m, err == nil)
+		}
 	}
 	destination, err := endpoint.Parse(detail.URI)
 	data.Destination, data.DestinationError = destination, err != nil

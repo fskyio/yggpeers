@@ -18,6 +18,7 @@ import (
 	"yggpeers/internal/metadata"
 	"yggpeers/internal/server"
 	"yggpeers/internal/store"
+	"yggpeers/internal/ygg"
 )
 
 func main() {
@@ -31,6 +32,13 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatal(err)
 	}
+	var admin *ygg.Admin
+	if cfg.YggdrasilAdmin != "" {
+		var err error
+		if admin, err = ygg.NewAdmin(cfg.YggdrasilAdmin); err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
 		log.Fatalf("create data dir: %v", err)
@@ -43,7 +51,7 @@ func main() {
 	defer st.Close()
 
 	f := fetcher.New(st)
-	enricher := metadata.New(st)
+	enricher := metadata.New(st, admin)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

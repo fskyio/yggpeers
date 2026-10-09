@@ -424,7 +424,7 @@ func (s *Store) SubmitProbeResults(id string, report protocol.ReportRequest, now
 	accepted := 0
 	changedTargets := make([]int64, 0, len(report.Results))
 	for _, observation := range report.Results {
-		if observation.PeerID <= 0 || (observation.Status != protocol.Up && observation.Status != protocol.Down) {
+		if !observation.Valid() {
 			return 0, ErrInvalidReport
 		}
 		var network bool
@@ -448,11 +448,13 @@ func (s *Store) SubmitProbeResults(id string, report protocol.ReportRequest, now
 		if network && !darknet {
 			return 0, ErrInvalidReport
 		}
-		var previous protocol.Status
-		err = tx.QueryRow(`SELECT status FROM probe_results WHERE round_id = ? AND probe_id = ? AND peer_id = ?`,
-			r.ID, id, observation.PeerID).Scan(&previous)
+		var previous protocol.Result
+		err = tx.QueryRow(`SELECT status, COALESCE(node_key, ''), COALESCE(protocol_version, '')
+			FROM probe_results WHERE round_id = ? AND probe_id = ? AND peer_id = ?`,
+			r.ID, id, observation.PeerID).Scan(&previous.Status, &previous.Key, &previous.ProtocolVersion)
 		if err == nil {
-			if previous != observation.Status {
+			previous.PeerID = observation.PeerID
+			if previous != observation {
 				return 0, ErrConflict
 			}
 			continue
@@ -463,13 +465,21 @@ func (s *Store) SubmitProbeResults(id string, report protocol.ReportRequest, now
 		if !open {
 			return 0, ErrRoundClosed
 		}
-		if _, err := tx.Exec(`INSERT INTO probe_results (round_id, probe_id, peer_id, status, received_at)
-			VALUES (?, ?, ?, ?, ?)`, r.ID, id, observation.PeerID, observation.Status, now.Format(probeTimeFormat)); err != nil {
+		at := now.Format(probeTimeFormat)
+		if _, err := tx.Exec(`INSERT INTO probe_results (round_id, probe_id, peer_id, status, node_key, protocol_version, received_at)
+			VALUES (?, ?, ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?)`, r.ID, id, observation.PeerID, observation.Status,
+			observation.Key, observation.ProtocolVersion, at); err != nil {
 			return 0, err
 		}
 		if _, err := tx.Exec(`UPDATE round_targets SET last_report_at = ? WHERE round_id = ? AND peer_id = ?`,
-			now.Format(probeTimeFormat), r.ID, observation.PeerID); err != nil {
+			at, r.ID, observation.PeerID); err != nil {
 			return 0, err
+		}
+		if observation.Key != "" {
+			if _, err := tx.Exec(`UPDATE peers SET node_key = ?, protocol_version = ?, node_seen_at = ? WHERE id = ?`,
+				observation.Key, observation.ProtocolVersion, at, observation.PeerID); err != nil {
+				return 0, err
+			}
 		}
 		accepted++
 		changedTargets = append(changedTargets, observation.PeerID)
