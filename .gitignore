@@ -1,5 +1,6 @@
 # Binaries for programs and plugins
 /yggpeers
+/yggpeers-probe
 *.exe
 *.exe~
 *.dll
@@ -25,3 +26,8 @@ data/
 # Python caches
 __pycache__/
 *.py[cod]
+
+# Probe credentials and deployment environment
+.env
+.env.*
+*.token

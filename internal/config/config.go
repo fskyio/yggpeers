@@ -7,29 +7,32 @@ import (
 )
 
 type Config struct {
-	ListenAddr          string
-	DBPath              string
-	FetchInterval       time.Duration
-	CheckInterval       time.Duration
-	DialTimeout         time.Duration
-	MaxConcurrentChecks int
-	BatchDelay          time.Duration
-	CheckDarknet        bool
-	Debug               bool
+	ListenAddr    string
+	DBPath        string
+	FetchInterval time.Duration
+	CheckInterval time.Duration
+	RoundTimeout  time.Duration
 }
 
 func New() Config {
+	interval := getDuration("CHECK_INTERVAL", 5*time.Minute)
 	return Config{
-		ListenAddr:          getenv("LISTEN_ADDR", ":8080"),
-		DBPath:              getenv("DB_PATH", "./data/yggpeers.db"),
-		FetchInterval:       getDuration("FETCH_INTERVAL", 15*time.Minute),
-		CheckInterval:       getDuration("CHECK_INTERVAL", 5*time.Minute),
-		DialTimeout:         getDuration("DIAL_TIMEOUT", 5*time.Second),
-		MaxConcurrentChecks: getInt("MAX_CONCURRENT_CHECKS", 50),
-		BatchDelay:          getDuration("BATCH_DELAY", 0),
-		CheckDarknet:        os.Getenv("CHECK_DARKNET") != "",
-		Debug:               os.Getenv("DEBUG") != "",
+		ListenAddr:    getenv("LISTEN_ADDR", ":8080"),
+		DBPath:        getenv("DB_PATH", "./data/yggpeers.db"),
+		FetchInterval: getDuration("FETCH_INTERVAL", 15*time.Minute),
+		CheckInterval: interval,
+		RoundTimeout:  getDuration("ROUND_TIMEOUT", interval*4/5),
 	}
+}
+
+func (c Config) Validate() error {
+	if c.FetchInterval <= 0 || c.CheckInterval <= 0 {
+		return fmt.Errorf("FETCH_INTERVAL and CHECK_INTERVAL must be positive")
+	}
+	if c.RoundTimeout <= 0 || c.RoundTimeout >= c.CheckInterval {
+		return fmt.Errorf("ROUND_TIMEOUT must be positive and less than CHECK_INTERVAL")
+	}
+	return nil
 }
 
 func getenv(key, def string) string {

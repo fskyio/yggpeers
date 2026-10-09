@@ -3,26 +3,30 @@ package store
 import (
 	"fmt"
 	"time"
+
+	"yggpeers/internal/protocol"
 )
 
 // HistoryHour contains observations in the half-open interval [Start, End).
 // No observations is distinct from an observed failure.
 type HistoryHour struct {
-	Start   time.Time
-	End     time.Time
-	Checks  int
-	UpCount int
+	Start        time.Time
+	End          time.Time
+	Checks       int
+	UpCount      int
+	UnknownCount int
 }
 
 // PeerDetail combines current state, calendar-day rollup uptime, and an exact
 // rolling seven-day observation history. Checks and UpCount cover Hours only.
 type PeerDetail struct {
 	PeerWithStats
-	Hours       []HistoryHour
-	WindowStart time.Time
-	WindowEnd   time.Time
-	Checks      int
-	UpCount     int
+	Hours        []HistoryHour
+	WindowStart  time.Time
+	WindowEnd    time.Time
+	Checks       int
+	UpCount      int
+	UnknownCount int
 }
 
 func (s *Store) migrateLastCheckedAt() error {
@@ -81,9 +85,11 @@ func (s *Store) GetPeerDetail(id int64, now time.Time) (PeerDetail, error) {
 	defer tx.Rollback()
 	err = tx.QueryRow(`
 		SELECT p.id, p.uri, p.country, p.protocol, p.host, p.port,
-			p.is_up, p.is_network, p.state_changed_at, p.last_checked_at,
-			CASE WHEN COALESCE(SUM(d.checks), 0) = 0 THEN NULL
-			     ELSE CAST(SUM(d.up_count) AS REAL) / SUM(d.checks) * 100 END
+			p.status, p.is_network, p.state_changed_at, p.last_checked_at,
+			p.status_valid_until, p.last_round_id, p.successful_probes,
+			p.reporting_probes, p.expected_probes, p.registered_probes,
+			CAST(SUM(d.up_count) AS REAL) / NULLIF(SUM(d.checks), 0) * 100,
+			CAST(SUM(d.checks) AS REAL) / NULLIF(SUM(d.checks + d.unknown_count), 0) * 100
 		FROM peers p
 		LEFT JOIN daily_peer_stats d ON d.peer_id = p.id
 			AND d.day >= DATE(?, '-' || ? || ' days')
@@ -91,11 +97,17 @@ func (s *Store) GetPeerDetail(id int64, now time.Time) (PeerDetail, error) {
 		GROUP BY p.id
 	`, now.Format("2006-01-02"), StatsWindowDays, id).Scan(
 		&detail.ID, &detail.URI, &detail.Country, &detail.Protocol,
-		&detail.Host, &detail.Port, &detail.IsUp, &detail.IsNetwork,
-		&detail.StateChangedAt, &detail.LastCheckedAt, &detail.UptimePct,
+		&detail.Host, &detail.Port, &detail.Status, &detail.IsNetwork,
+		&detail.StateChangedAt, &detail.LastCheckedAt,
+		&detail.StatusValidUntil, &detail.LastRoundID, &detail.SuccessfulProbes,
+		&detail.ReportingProbes, &detail.ExpectedProbes, &detail.RegisteredProbes,
+		&detail.UptimePct, &detail.CoveragePct,
 	)
 	if err != nil {
 		return detail, err
+	}
+	if detail.StatusValidUntil == nil || !now.Before(*detail.StatusValidUntil) {
+		detail.Status = protocol.Unknown
 	}
 	detail.Hours = make([]HistoryHour, 168)
 	for i := range detail.Hours {
@@ -106,7 +118,7 @@ func (s *Store) GetPeerDetail(id int64, now time.Time) (PeerDetail, error) {
 	// bounds fetch a small superset, then time comparisons enforce exact bounds
 	// without losing timestamp precision to SQLite date functions.
 	const sqliteSecond = "2006-01-02 15:04:05"
-	rows, err := tx.Query(`SELECT checked_at, is_up FROM checks
+	rows, err := tx.Query(`SELECT checked_at, status FROM checks
 		WHERE peer_id = ? AND checked_at >= ? AND checked_at < ?`,
 		id, detail.WindowStart.Truncate(time.Second).Format(sqliteSecond),
 		now.Truncate(time.Second).Add(time.Second).Format(sqliteSecond))
@@ -116,17 +128,22 @@ func (s *Store) GetPeerDetail(id int64, now time.Time) (PeerDetail, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var checkedAt time.Time
-		var up bool
-		if err := rows.Scan(&checkedAt, &up); err != nil {
+		var status protocol.Status
+		if err := rows.Scan(&checkedAt, &status); err != nil {
 			return detail, err
 		}
 		if checkedAt.Before(detail.WindowStart) || !checkedAt.Before(now) {
 			continue
 		}
 		i := int(checkedAt.Sub(detail.WindowStart) / time.Hour)
+		if status == protocol.Unknown {
+			detail.Hours[i].UnknownCount++
+			detail.UnknownCount++
+			continue
+		}
 		detail.Hours[i].Checks++
 		detail.Checks++
-		if up {
+		if status == protocol.Up {
 			detail.Hours[i].UpCount++
 			detail.UpCount++
 		}

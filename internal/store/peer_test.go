@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"yggpeers/internal/protocol"
 )
 
 func newHistoryStore(t *testing.T) *Store {
@@ -85,6 +87,12 @@ func TestLastCheckedMigrationBackfill(t *testing.T) {
 		if observed.UptimePct == nil || *observed.UptimePct != 50 {
 			t.Fatalf("legacy rollup uptime = %v, want 50", observed.UptimePct)
 		}
+		if observed.Status != protocol.Unknown || unknown.Status != protocol.Unknown || observed.StatusValidUntil != nil {
+			t.Fatalf("legacy state must have no current evidence: observed=%+v unknown=%+v", observed, unknown)
+		}
+		if observed.Checks != 2 || observed.UpCount != 1 || observed.UnknownCount != 0 || observed.CoveragePct == nil || *observed.CoveragePct != 100 {
+			t.Fatalf("legacy history changed: %+v", observed)
+		}
 		if err := s.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -94,71 +102,65 @@ func TestLastCheckedMigrationBackfill(t *testing.T) {
 func TestObservedStateTransitionsAndPruning(t *testing.T) {
 	s := newHistoryStore(t)
 	id := addHistoryPeer(t, s, "tcp://example.com:123")
-	unknown := historyDetail(t, s, id, time.Now())
-	if unknown.LastCheckedAt != nil || unknown.IsUp || unknown.UptimePct != nil {
+	now := time.Now().UTC().Truncate(time.Second)
+	unknown := historyDetail(t, s, id, now)
+	if unknown.LastCheckedAt != nil || unknown.Status != protocol.Unknown || unknown.UptimePct != nil || unknown.CoveragePct != nil {
 		t.Fatalf("new peer must be unobserved: %+v", unknown)
 	}
-	if err := s.RecordChecks([]CheckResult{{PeerID: id, IsUp: false}}); err != nil {
+	probe, _, err := s.CreateProbe("history")
+	if err != nil {
 		t.Fatal(err)
 	}
-	first := historyDetail(t, s, id, time.Now())
-	if first.LastCheckedAt == nil || !first.StateChangedAt.Equal(*first.LastCheckedAt) || first.StateChangedAt.Equal(unknown.StateChangedAt) {
+	if _, err := s.CheckInProbe(probe.ID, false, now.Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	observe := func(at time.Time, status protocol.Status) PeerDetail {
+		t.Helper()
+		if _, err := s.AdvanceProbeRounds(at, time.Minute, 10*time.Second); err != nil {
+			t.Fatal(err)
+		}
+		work, err := s.CheckInProbe(probe.ID, false, at)
+		if err != nil || work == nil {
+			t.Fatalf("assignment = %v, error = %v", work, err)
+		}
+		if _, err := s.SubmitProbeResults(probe.ID, protocol.ReportRequest{
+			RoundID: work.RoundID, Results: []protocol.Result{{PeerID: id, Status: status}},
+		}, at.Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		return historyDetail(t, s, id, at.Add(2*time.Second))
+	}
+	first := observe(now, protocol.Down)
+	if first.Status != protocol.Down || first.LastCheckedAt == nil || !first.StateChangedAt.Equal(*first.LastCheckedAt) || first.StateChangedAt.Equal(unknown.StateChangedAt) {
 		t.Fatalf("first-down baseline is not first observation: %+v", first)
 	}
-	// Put the baseline and freshness in the past so repeated calls need no sleep.
-	old := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
-	if _, err := s.db.Exec(`UPDATE peers SET state_changed_at = ?, last_checked_at = ? WHERE id = ?`, old, old, id); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RecordChecks([]CheckResult{{PeerID: id, IsUp: false}}); err != nil {
-		t.Fatal(err)
-	}
-	repeated := historyDetail(t, s, id, time.Now())
-	if repeated.LastCheckedAt == nil || !repeated.LastCheckedAt.After(old) || !repeated.StateChangedAt.Equal(old) || repeated.IsUp {
+	repeated := observe(now.Add(time.Minute), protocol.Down)
+	if repeated.LastCheckedAt == nil || !repeated.LastCheckedAt.After(*first.LastCheckedAt) || !repeated.StateChangedAt.Equal(first.StateChangedAt) || repeated.Status != protocol.Down {
 		t.Fatalf("repeated down changed baseline or missed freshness: %+v", repeated)
 	}
-	if err := s.RecordChecks([]CheckResult{{PeerID: id, IsUp: true}}); err != nil {
-		t.Fatal(err)
-	}
-	changed := historyDetail(t, s, id, time.Now())
-	if !changed.IsUp || changed.LastCheckedAt == nil || !changed.StateChangedAt.Equal(*changed.LastCheckedAt) || !changed.StateChangedAt.After(old) {
+	changed := observe(now.Add(2*time.Minute), protocol.Up)
+	if changed.Status != protocol.Up || changed.LastCheckedAt == nil || !changed.StateChangedAt.Equal(*changed.LastCheckedAt) || !changed.StateChangedAt.After(first.StateChangedAt) {
 		t.Fatalf("up transition not recorded: %+v", changed)
 	}
 	if changed.UptimePct == nil || math.Abs(*changed.UptimePct-100.0/3.0) > 1e-10 {
 		t.Fatalf("daily uptime = %v, want one of three checks up", changed.UptimePct)
 	}
-	if _, err := s.db.Exec(`UPDATE peers SET state_changed_at = ?, last_checked_at = ? WHERE id = ?`, old, old, id); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.RecordChecks([]CheckResult{{PeerID: id, IsUp: true}}); err != nil {
-		t.Fatal(err)
-	}
-	repeatedUp := historyDetail(t, s, id, time.Now())
-	if repeatedUp.LastCheckedAt == nil || !repeatedUp.LastCheckedAt.After(old) || !repeatedUp.StateChangedAt.Equal(old) || !repeatedUp.IsUp {
+	repeatedUp := observe(now.Add(3*time.Minute), protocol.Up)
+	if repeatedUp.LastCheckedAt == nil || !repeatedUp.LastCheckedAt.After(*changed.LastCheckedAt) || !repeatedUp.StateChangedAt.Equal(changed.StateChangedAt) || repeatedUp.Status != protocol.Up {
 		t.Fatalf("repeated up changed baseline or missed freshness: %+v", repeatedUp)
 	}
+	old := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
 	if _, err := s.db.Exec(`UPDATE checks SET checked_at = ? WHERE peer_id = ?;
-		UPDATE peers SET last_checked_at = ? WHERE id = ?`, old, id, old, id); err != nil {
+		UPDATE peers SET last_checked_at = ? WHERE id = ?;
+		UPDATE daily_peer_stats SET day = DATE(day, '-10000 days') WHERE peer_id = ?`, sqliteTime(old), id, sqliteTime(old), id, id); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.PruneOldChecks(7); err != nil {
 		t.Fatal(err)
 	}
-	pruned := historyDetail(t, s, id, time.Now())
-	if pruned.LastCheckedAt == nil || !pruned.LastCheckedAt.Equal(old) || pruned.Checks != 0 {
+	pruned := historyDetail(t, s, id, now.Add(4*time.Minute))
+	if pruned.LastCheckedAt == nil || !pruned.LastCheckedAt.Equal(old) || pruned.Checks != 0 || pruned.UptimePct != nil || pruned.CoveragePct != nil {
 		t.Fatalf("pruning lost freshness or retained old history: %+v", pruned)
-	}
-}
-
-func TestRecordChecksRollback(t *testing.T) {
-	s := newHistoryStore(t)
-	id := addHistoryPeer(t, s, "tcp://example.com:123")
-	if err := s.RecordChecks([]CheckResult{{PeerID: id, IsUp: true}, {PeerID: id + 100, IsUp: true}}); err == nil {
-		t.Fatal("expected missing peer to reject batch")
-	}
-	detail := historyDetail(t, s, id, time.Now())
-	if detail.IsUp || detail.LastCheckedAt != nil || detail.Checks != 0 || detail.UptimePct != nil {
-		t.Fatalf("failed batch persisted partial observations: %+v", detail)
 	}
 }
 
@@ -168,27 +170,28 @@ func TestPeerHistoryExactWindow(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 34, 56, 123456789, time.FixedZone("offset", 2*60*60))
 	start := now.UTC().Add(-168 * time.Hour)
 	samples := []struct {
-		at time.Time
-		up bool
+		at     time.Time
+		status protocol.Status
 	}{
-		{start.Add(-time.Nanosecond), true}, // retained physical row outside window
-		{start, true},
-		{start.Add(time.Hour - time.Nanosecond), false},
-		{start.Add(time.Hour), true},
-		{start.Add(time.Hour + time.Minute), true},
-		{start.Add(2 * time.Hour), false},
-		{start.Add(2*time.Hour + time.Minute), false},
-		{now.UTC().Add(-time.Nanosecond), true},
-		{now.UTC(), false},               // half-open end
-		{now.UTC().Add(time.Hour), true}, // future row
+		{start.Add(-time.Nanosecond), protocol.Up}, // retained physical row outside window
+		{start, protocol.Up},
+		{start.Add(time.Hour - time.Nanosecond), protocol.Down},
+		{start.Add(time.Hour), protocol.Up},
+		{start.Add(time.Hour + time.Minute), protocol.Up},
+		{start.Add(2 * time.Hour), protocol.Down},
+		{start.Add(2*time.Hour + time.Minute), protocol.Down},
+		{start.Add(3 * time.Hour), protocol.Unknown},
+		{now.UTC().Add(-time.Nanosecond), protocol.Up},
+		{now.UTC(), protocol.Unknown},           // half-open end
+		{now.UTC().Add(time.Hour), protocol.Up}, // future row
 	}
 	for _, sample := range samples {
-		if _, err := s.db.Exec(`INSERT INTO checks (peer_id, checked_at, is_up) VALUES (?, ?, ?)`, id, sample.at.UTC(), sample.up); err != nil {
+		if _, err := s.db.Exec(`INSERT INTO checks (peer_id, checked_at, status) VALUES (?, ?, ?)`, id, sqliteTime(sample.at), sample.status); err != nil {
 			t.Fatal(err)
 		}
 	}
 	detail := historyDetail(t, s, id, now)
-	if len(detail.Hours) != 168 || !detail.WindowStart.Equal(start) || !detail.WindowEnd.Equal(now) || detail.Checks != 7 || detail.UpCount != 4 {
+	if len(detail.Hours) != 168 || !detail.WindowStart.Equal(start) || !detail.WindowEnd.Equal(now) || detail.Checks != 7 || detail.UpCount != 4 || detail.UnknownCount != 1 {
 		t.Fatalf("incorrect rolling window: %+v", detail)
 	}
 	for i, hour := range detail.Hours {
@@ -196,7 +199,7 @@ func TestPeerHistoryExactWindow(t *testing.T) {
 		if hour.Start.Location() != time.UTC || hour.End.Location() != time.UTC || !hour.Start.Equal(wantStart) || !hour.End.Equal(wantStart.Add(time.Hour)) {
 			t.Fatalf("hour %d boundaries = %+v", i, hour)
 		}
-		wantChecks, wantUp := 0, 0
+		wantChecks, wantUp, wantUnknown := 0, 0, 0
 		switch i {
 		case 0:
 			wantChecks, wantUp = 2, 1 // mixed
@@ -204,10 +207,12 @@ func TestPeerHistoryExactWindow(t *testing.T) {
 			wantChecks, wantUp = 2, 2 // all pass
 		case 2:
 			wantChecks, wantUp = 2, 0 // all fail
+		case 3:
+			wantUnknown = 1
 		case 167:
 			wantChecks, wantUp = 1, 1
 		}
-		if hour.Checks != wantChecks || hour.UpCount != wantUp {
+		if hour.Checks != wantChecks || hour.UpCount != wantUp || hour.UnknownCount != wantUnknown {
 			t.Fatalf("hour %d = %+v, want checks %d/up %d", i, hour, wantChecks, wantUp)
 		}
 	}
@@ -216,7 +221,9 @@ func TestPeerHistoryExactWindow(t *testing.T) {
 func TestPeerDetailDeletedPeer(t *testing.T) {
 	s := newHistoryStore(t)
 	id := addHistoryPeer(t, s, "tcp://example.com:123")
-	if err := s.RecordChecks([]CheckResult{{PeerID: id, IsUp: true}}); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO checks(peer_id, checked_at, status) VALUES (?, ?, 'up');
+		INSERT INTO daily_peer_stats(peer_id, day, checks, up_count) VALUES (?, DATE('now'), 1, 1)`,
+		id, sqliteTime(time.Now()), id); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.BulkUpsertPeers([]PeerInput{{URI: "tcp://replacement:123", Country: "Test", Protocol: "tcp", Host: "replacement", Port: "123"}}); err != nil {

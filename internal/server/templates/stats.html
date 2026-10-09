@@ -34,11 +34,12 @@
 					<tr><td>Total peers</td><td>{{.TotalPeers}}</td></tr>
 					<tr class="up"><td>Online</td><td>{{.OnlinePeers}} ({{pct .OnlinePct}}%)</td></tr>
 					<tr class="down"><td>Offline</td><td>{{.OfflinePeers}}</td></tr>
+					<tr class="unknown"><td>Unknown</td><td>{{.UnknownPeers}}</td></tr>
 					<tr><td>Avg. 7d uptime</td><td>{{optpct .AvgUptimePct}}</td></tr>
 				</table>
 			</section>
 			<section class="stat-card chart-card">
-				<h2>Online vs Offline</h2>
+				<h2>Reachability: online, offline, unknown</h2>
 				<div class="pie-wrap"><canvas id="onlineOfflineChart"></canvas></div>
 			</section>
 		</div>
@@ -55,12 +56,14 @@
 				<h2>Top Countries</h2>
 				<div class="table-scroll">
 					<table>
-						<tr class="table-head"><td></td><td>peers</td><td>online</td><td class="hide-mobile">online %</td><td>7d uptime</td></tr>
+						<tr class="table-head"><td></td><td>peers</td><td>online</td><td>offline</td><td>unknown</td><td class="hide-mobile">online %</td><td>7d uptime</td></tr>
 						{{range .TopCountries}}
 						<tr>
 							<td class="country-name">{{.Name}}</td>
 							<td>{{.Count}}</td>
 							<td class="up">{{.OnlineCount}}</td>
+							<td>{{.OfflineCount}}</td>
+							<td>{{.UnknownCount}}</td>
 							<td class="muted hide-mobile">{{pct .OnlinePct}}%</td>
 							<td class="muted">{{optpct .AvgUptime}}</td>
 						</tr>
@@ -79,12 +82,14 @@
 				<h2>Protocols</h2>
 				<div class="table-scroll">
 					<table>
-						<tr class="table-head"><td></td><td>peers</td><td>online</td><td class="hide-mobile">online %</td><td>share</td></tr>
+						<tr class="table-head"><td></td><td>peers</td><td>online</td><td>offline</td><td>unknown</td><td class="hide-mobile">online %</td><td>share</td></tr>
 						{{range .Protocols}}
 						<tr>
 							<td>{{.Name}}</td>
 							<td>{{.Count}}</td>
 							<td class="up">{{.OnlineCount}}</td>
+							<td>{{.OfflineCount}}</td>
+							<td>{{.UnknownCount}}</td>
 							<td class="muted hide-mobile">{{pct .OnlinePct}}%</td>
 							<td class="muted">{{pct .Percent}}%</td>
 						</tr>
@@ -121,6 +126,7 @@
 		var muted = isDark ? '#a8a8a8' : '#555555';
 		var onlineColor = isDark ? '#65bb69' : '#1a5e1a';
 		var offlineColor = isDark ? '#a8a8a8' : '#555555';
+		var unknownColor = isDark ? '#d4ad5a' : '#9a741f';
 		var gridColor = isDark ? '#333' : '#eee';
 		var bgColor = isDark ? '#1a1a1a' : '#fff';
 		var fgColor = isDark ? '#e0e0e0' : '#111';
@@ -135,17 +141,18 @@
 			labels: isMobile ? { boxWidth: 10, padding: 8, font: { size: 10 } } : {}
 		};
 
-		// --- Online / Offline pie ---
+		// --- Effective reachability pie ---
 		var onlineCount = {{.OnlinePeers}};
 		var offlineCount = {{.OfflinePeers}};
-		if (onlineCount + offlineCount > 0) {
+		var unknownCount = {{.UnknownPeers}};
+		if (onlineCount + offlineCount + unknownCount > 0) {
 			new Chart(document.getElementById('onlineOfflineChart'), {
 				type: 'doughnut',
 				data: {
-					labels: ['Online', 'Offline'],
+					labels: ['Online', 'Offline', 'Unknown'],
 					datasets: [{
-						data: [onlineCount, offlineCount],
-						backgroundColor: [onlineColor, offlineColor],
+						data: [onlineCount, offlineCount, unknownCount],
+						backgroundColor: [onlineColor, offlineColor, unknownColor],
 						borderWidth: 1,
 						borderColor: bgColor
 					}]
@@ -188,6 +195,24 @@
 							pointRadius: isMobile ? 2 : 3,
 							borderWidth: isMobile ? 1.5 : 2
 						}
+						,{
+							label: 'Offline',
+							data: timeline.map(function(d) { return Math.max(0, d.TotalPeers - d.OnlinePeers - d.UnknownPeers); }),
+							borderColor: offlineColor,
+							backgroundColor: 'transparent',
+							tension: 0.3,
+							pointRadius: isMobile ? 2 : 3,
+							borderWidth: isMobile ? 1.5 : 2
+						},
+						{
+							label: 'Unknown',
+							data: timeline.map(function(d) { return d.UnknownPeers; }),
+							borderColor: unknownColor,
+							backgroundColor: 'transparent',
+							tension: 0.3,
+							pointRadius: isMobile ? 2 : 3,
+							borderWidth: isMobile ? 1.5 : 2
+						}
 					]
 				},
 				options: {
@@ -221,8 +246,13 @@
 						},
 						{
 							label: 'Offline',
-							data: countries.map(function(c) { return c.Count - c.OnlineCount; }),
+							data: countries.map(function(c) { return c.OfflineCount; }),
 							backgroundColor: offlineColor
+						}
+						,{
+							label: 'Unknown',
+							data: countries.map(function(c) { return c.UnknownCount; }),
+							backgroundColor: unknownColor
 						}
 					]
 				},

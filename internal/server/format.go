@@ -6,15 +6,21 @@ import (
 	"html/template"
 	"time"
 
+	"yggpeers/internal/protocol"
 	"yggpeers/internal/store"
 )
 
-// statusString renders a peer's up/down state plus how long it has been in
-// that state. It's exposed to templates as the {{status}} func.
+// statusString renders effective reachability plus its known-state duration.
+// Unknown observations must not inherit the previous up/down duration.
 func statusString(p store.PeerWithStats) string {
-	state := "online"
-	if !p.IsUp {
+	state := "unknown"
+	switch p.Status {
+	case protocol.Up:
+		state = "online"
+	case protocol.Down:
 		state = "offline"
+	default:
+		return state
 	}
 	if p.StateChangedAt.IsZero() {
 		return state

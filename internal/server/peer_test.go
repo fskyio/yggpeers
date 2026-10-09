@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"yggpeers/internal/endpoint"
+	"yggpeers/internal/protocol"
 	"yggpeers/internal/store"
 )
 
@@ -68,28 +69,48 @@ func TestMatchingPeersUsesSOCKSDestinationNotProxy(t *testing.T) {
 
 func TestObservedStatusDoesNotTreatMissingOrStaleChecksAsOffline(t *testing.T) {
 	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-	boundary := now.Add(-15 * time.Minute)
-	stale := boundary.Add(-time.Nanosecond)
+	future := now.Add(time.Minute)
+	expired := now.Add(-time.Nanosecond)
 	cases := []struct {
-		name    string
-		peer    store.Peer
-		darknet bool
-		class   string
+		name  string
+		peer  store.Peer
+		class string
 	}{
-		{"unobserved", store.Peer{}, false, "unknown"},
-		{"observed down", store.Peer{LastCheckedAt: &now}, false, "down"},
-		{"observed up", store.Peer{IsUp: true, LastCheckedAt: &now}, false, "up"},
-		{"fresh boundary", store.Peer{IsUp: true, LastCheckedAt: &boundary}, false, "up"},
-		{"stale up", store.Peer{IsUp: true, LastCheckedAt: &stale}, false, "unknown"},
-		{"stale down", store.Peer{LastCheckedAt: &stale}, false, "unknown"},
-		{"monitoring disabled", store.Peer{IsUp: true, LastCheckedAt: &now, IsNetwork: true}, false, "unknown"},
-		{"overlay monitored", store.Peer{IsUp: true, LastCheckedAt: &now, IsNetwork: true}, true, "up"},
+		{"unobserved", store.Peer{Status: protocol.Unknown}, "unknown"},
+		{"observed down", store.Peer{Status: protocol.Down, LastCheckedAt: &now, StatusValidUntil: &future}, "down"},
+		{"observed up", store.Peer{Status: protocol.Up, LastCheckedAt: &now, StatusValidUntil: &future}, "up"},
+		{"expiry boundary", store.Peer{Status: protocol.Up, LastCheckedAt: &now, StatusValidUntil: &now}, "unknown"},
+		{"expired up", store.Peer{Status: protocol.Up, LastCheckedAt: &now, StatusValidUntil: &expired}, "unknown"},
+		{"expired down", store.Peer{Status: protocol.Down, LastCheckedAt: &now, StatusValidUntil: &expired}, "unknown"},
+		{"no validity", store.Peer{Status: protocol.Down, LastCheckedAt: &now}, "unknown"},
+		{"incomplete fresh round", store.Peer{Status: protocol.Unknown, StatusValidUntil: &future}, "unknown"},
+		{"overlay eligible", store.Peer{Status: protocol.Up, LastCheckedAt: &now, StatusValidUntil: &future, IsNetwork: true}, "up"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := observedStatus(tc.peer, 5*time.Minute, tc.darknet, now); got.Class != tc.class {
+			if got := observedStatus(tc.peer, now); got.Class != tc.class {
 				t.Errorf("status class = %q, want %q", got.Class, tc.class)
 			}
 		})
+	}
+}
+
+func TestHistoryCellsKeepUnknownSeparateFromFailures(t *testing.T) {
+	cases := []struct {
+		hour       store.HistoryHour
+		class      string
+		incomplete bool
+	}{
+		{store.HistoryHour{}, "unknown", false},
+		{store.HistoryHour{UnknownCount: 2}, "unknown", true},
+		{store.HistoryHour{Checks: 1, UnknownCount: 2}, "down", true},
+		{store.HistoryHour{Checks: 1, UpCount: 1, UnknownCount: 2}, "up", true},
+		{store.HistoryHour{Checks: 2, UpCount: 1}, "mixed", false},
+	}
+	for _, tc := range cases {
+		got := historyCells([]store.HistoryHour{tc.hour})[0]
+		if got.Class != tc.class || got.Unknown != tc.incomplete {
+			t.Errorf("hour %+v: class %q, incomplete %v; want %q, %v", tc.hour, got.Class, got.Unknown, tc.class, tc.incomplete)
+		}
 	}
 }

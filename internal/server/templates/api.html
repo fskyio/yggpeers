@@ -65,9 +65,9 @@
 						<td>Filter by protocol. Case-insensitive. One of: <code>tcp</code>, <code>tls</code>, <code>quic</code>, <code>ws</code>, <code>wss</code>, <code>socks</code>, <code>sockstls</code>.</td>
 					</tr>
 					<tr>
-						<td><code>is_up</code></td>
-						<td>boolean</td>
-						<td>Filter by current reachability. <code>true</code> returns only peers that are currently online; <code>false</code> returns only offline peers.</td>
+						<td><code>status</code></td>
+						<td>string</td>
+						<td>Filter by effective reachability: <code>up</code>, <code>down</code>, or <code>unknown</code>. The obsolete <code>is_up</code> parameter is rejected with HTTP 400.</td>
 					</tr>
 					<tr>
 						<td><code>is_network</code></td>
@@ -81,11 +81,14 @@
 		<section class="api-section">
 			<h2>Response format</h2>
 			<p class="api-desc">The response is a JSON object with metadata and a <code>peers</code> array. Counts reflect the filtered result set, not the full database.</p>
+			<p class="api-desc">Breaking contract change: JSON and CSV replace the old boolean reachability field with <code>status</code> and explicit freshness and distributed-probe coverage. Unknown never means offline.</p>
 			<pre class="api-pre">{
   "updated_at":  "2025-01-01T12:00:00Z",  // time this response was generated (UTC)
   "window_days": 7,                        // uptime window used for uptime_pct
   "total":       142,                      // total peers in this response
   "online":      98,                       // peers currently reachable
+  "offline":     30,                       // all eligible probes reported failure
+  "unknown":     14,                       // incomplete, missing, or expired evidence
   "peers": [
     {
       "uri":              "tls://example.com:8001",  // full connection URI
@@ -93,10 +96,18 @@
       "protocol":         "tls",
       "host":             "example.com",
       "port":             8001,
-      "is_up":            true,            // currently reachable
+      "status":           "up",            // up, down, or unknown
       "is_network":       false,           // true for overlay network peers
-      "state_changed_at": "2025-01-01T11:30:00Z",  // last up/down transition (or null)
-      "uptime_pct":       98.21            // 7-day uptime percentage (or null if no data)
+      "state_changed_at": "2025-01-01T11:30:00Z",  // last effective status change, including expiry (or null)
+      "last_checked_at":  "2025-01-01T11:59:00Z",  // server measurement time (or null)
+      "status_valid_until": "2025-01-01T12:06:00Z", // expiry (or null)
+      "last_round_id":    42,              // published measurement round (or null)
+      "successful_probes": 2,              // successful probes in that round
+      "reporting_probes":  3,              // eligible probes reporting
+      "expected_probes":   3,              // eligible probes expected
+      "registered_probes": 4,              // registered enabled probes in the round
+      "uptime_pct":       98.21,           // known rounds up / all known rounds (or null)
+      "coverage_pct":     92.50            // known rounds / all rounds (or null)
     },
     ...
   ]
@@ -112,7 +123,7 @@
 				</div>
 				<div class="api-example">
 					<p class="example-label">Only peers currently online</p>
-					<a href="/api/v1/peers?is_up=true" class="example-url">/api/v1/peers?is_up=true</a>
+					<a href="/api/v1/peers?status=up" class="example-url">/api/v1/peers?status=up</a>
 				</div>
 				<div class="api-example">
 					<p class="example-label">QUIC peers in Germany</p>
@@ -120,7 +131,11 @@
 				</div>
 				<div class="api-example">
 					<p class="example-label">Online TLS peers, excluding overlay networks</p>
-					<a href="/api/v1/peers?protocol=tls&is_up=true&is_network=false" class="example-url">/api/v1/peers?protocol=tls&is_up=true&is_network=false</a>
+					<a href="/api/v1/peers?protocol=tls&status=up&is_network=false" class="example-url">/api/v1/peers?protocol=tls&status=up&is_network=false</a>
+				</div>
+				<div class="api-example">
+					<p class="example-label">Unknown or expired reachability</p>
+					<a href="/api/v1/peers?status=unknown" class="example-url">/api/v1/peers?status=unknown</a>
 				</div>
 			</div>
 		</section>
@@ -138,6 +153,7 @@
 					<a href="/peers.csv" class="example-url">/peers.csv</a>
 				</div>
 			</div>
+			<p class="api-desc">CSV has one row per peer with the same scalar fields as JSON. Optional timestamps, round IDs, and percentages are blank when absent. Probe counts are snapshots of the published round, not the current registry.</p>
 			<p class="api-desc" style="margin-top:0.75rem;">The CSV response includes two response headers carrying the metadata that the JSON envelope provides inline:</p>
 			<table class="api-table">
 				<thead>
@@ -175,8 +191,9 @@
 		<section class="api-section">
 			<h2>Notes</h2>
 			<ul class="api-notes">
-				<li>Peer reachability is checked every few minutes. Responses are cached for up to 30 seconds, so data may be slightly stale.</li>
-				<li>The <code>uptime_pct</code> field reflects the past <code>window_days</code> days. It is <code>null</code> for peers that were added recently and have not yet accumulated enough check history.</li>
+				<li>Distributed probes check reachability in scheduled rounds. <code>up</code> requires at least one success; <code>down</code> requires all eligible reports to be failures. Missing reports and expired measurements are <code>unknown</code>.</li>
+				<li>The <code>uptime_pct</code> field excludes unknown rounds. <code>coverage_pct</code> includes them in its denominator. Legacy history is single-location data without per-probe attribution.</li>
+				<li><code>registered_probes</code> is frozen for the round. <code>expected_probes</code> excludes probes ineligible for that peer; <code>reporting_probes</code> counts received eligible reports. See the peer page for regional successes, failures, and missing reports.</li>
 				<li>Peers listed with <code>is_network: true</code> are hosted inside overlay networks (e.g. accessed via another Yggdrasil node) and may not be reachable from the public internet.</li>
 				<li>Peer data is sourced from the <a href="https://github.com/yggdrasil-network/public-peers">yggdrasil-network/public-peers</a> repository and refreshed periodically.</li>
 				<li>Error responses use the same <code>application/json</code> content type as successful responses, with the shape <code>{"error": "..."}</code>.</li>

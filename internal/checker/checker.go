@@ -8,32 +8,29 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/quic-go/quic-go"
 
 	"yggpeers/internal/config"
-	"yggpeers/internal/store"
+	"yggpeers/internal/protocol"
 )
 
 type Checker struct {
-	cfg        config.Config
-	store      *store.Store
+	cfg        config.ProbeConfig
 	dialer     *net.Dialer
 	httpClient *http.Client
 }
 
-func New(cfg config.Config, s *store.Store) *Checker {
+func New(cfg config.ProbeConfig) *Checker {
 	dialer := &net.Dialer{Timeout: cfg.DialTimeout}
 	return &Checker{
 		cfg:    cfg,
-		store:  s,
 		dialer: dialer,
 		httpClient: &http.Client{
 			Timeout: cfg.DialTimeout,
 			Transport: &http.Transport{
-				DialContext:           dialer.DialContext,
+				DialContext: dialer.DialContext,
+				// These are peer reachability checks, not authenticated API traffic.
 				TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
 				TLSHandshakeTimeout:   cfg.DialTimeout,
 				ResponseHeaderTimeout: cfg.DialTimeout,
@@ -42,93 +39,38 @@ func New(cfg config.Config, s *store.Store) *Checker {
 	}
 }
 
-func (c *Checker) CheckAll(ctx context.Context) error {
-	allPeers, err := c.store.GetAllPeers()
-	if err != nil {
-		return err
+// Check reports transport reachability, not protocol-level peer validity.
+// A per-target timeout is down; cancellation of the assignment is no result.
+func (c *Checker) Check(ctx context.Context, target protocol.Target) (protocol.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return protocol.Result{}, err
 	}
-
-	// Filter out overlay-network peers when CHECK_DARKNET is disabled.
-	// Recording them as "down" would corrupt their uptime numbers.
-	peers := allPeers
-	if !c.cfg.CheckDarknet {
-		peers = peers[:0]
-		for _, p := range allPeers {
-			if !p.IsNetwork {
-				peers = append(peers, p)
-			}
-		}
-	}
-
-	log.Printf("Checking %d peers...", len(peers))
-
-	results := make([]store.CheckResult, len(peers))
-	batchSize := c.cfg.MaxConcurrentChecks
-	if batchSize < 1 {
-		batchSize = 1
-	}
-
-	for batchStart := 0; batchStart < len(peers); batchStart += batchSize {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if batchStart > 0 && c.cfg.BatchDelay > 0 {
-			select {
-			case <-time.After(c.cfg.BatchDelay):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-		end := batchStart + batchSize
-		if end > len(peers) {
-			end = len(peers)
-		}
-		batch := peers[batchStart:end]
-
-		var wg sync.WaitGroup
-		for i, p := range batch {
-			wg.Add(1)
-			go func(i int, p store.Peer) {
-				defer wg.Done()
-				results[batchStart+i] = store.CheckResult{PeerID: p.ID, IsUp: c.check(ctx, p)}
-			}(i, p)
-		}
-		wg.Wait()
-	}
-
-	if err := c.store.RecordChecks(results); err != nil {
-		log.Printf("warn: record checks: %v", err)
-	}
-
-	if err := c.store.PruneOldChecks(store.StatsWindowDays); err != nil {
-		log.Printf("warn: prune old checks: %v", err)
-	}
-	// Re-run the expensive aggregate queries now, while the checker is
-	// already active, so HTTP handlers always read from a warm cache.
-	c.store.RefreshCaches()
-	log.Println("Check complete.")
-	return nil
-}
-
-func (c *Checker) check(ctx context.Context, p store.Peer) bool {
-	addr := net.JoinHostPort(p.Host, p.Port)
-	switch p.Protocol {
-	case "tcp", "tls":
-		return c.dialTCP(ctx, addr)
+	checkCtx, cancel := context.WithTimeout(ctx, c.cfg.DialTimeout)
+	defer cancel()
+	addr := net.JoinHostPort(target.Host, target.Port)
+	var up bool
+	switch target.Protocol {
 	case "quic":
-		return c.dialQUIC(ctx, addr)
+		up = c.dialQUIC(checkCtx, addr)
 	case "ws":
-		return c.probeHTTP("http", p.Host, p.Port)
+		up = c.probeHTTP(checkCtx, "http", target.Host, target.Port)
 	case "wss":
-		return c.probeHTTP("https", p.Host, p.Port)
+		up = c.probeHTTP(checkCtx, "https", target.Host, target.Port)
 	default:
-		return c.dialTCP(ctx, addr)
+		// TCP and TLS intentionally both use TCP connection reachability.
+		up = c.dialTCP(checkCtx, addr)
 	}
+	if err := ctx.Err(); err != nil {
+		return protocol.Result{}, err
+	}
+	status := protocol.Down
+	if up {
+		status = protocol.Up
+	}
+	return protocol.Result{PeerID: target.PeerID, Status: status}, nil
 }
 
 func (c *Checker) dialTCP(ctx context.Context, addr string) bool {
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.DialTimeout)
-	defer cancel()
 	conn, err := c.dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		if c.cfg.Debug {
@@ -141,9 +83,6 @@ func (c *Checker) dialTCP(ctx context.Context, addr string) bool {
 }
 
 func (c *Checker) dialQUIC(ctx context.Context, addr string) bool {
-	ctx, cancel := context.WithTimeout(ctx, c.cfg.DialTimeout)
-	defer cancel()
-
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		if c.cfg.Debug {
@@ -169,14 +108,13 @@ func (c *Checker) dialQUIC(ctx context.Context, addr string) bool {
 		}
 		dialAddr = net.JoinHostPort(addrs[0], port)
 	}
-
 	conn, err := quic.DialAddr(ctx, dialAddr, &tls.Config{
 		InsecureSkipVerify: true,
 		ServerName:         serverName,
 		NextProtos:         []string{"h3"},
 	}, nil)
 	if err != nil {
-		// ALPN error means QUIC/TLS negotiation completed — peer is up.
+		// An ALPN error means QUIC/TLS negotiation completed: peer is up.
 		if strings.Contains(err.Error(), "ALPN") {
 			return true
 		}
@@ -189,9 +127,13 @@ func (c *Checker) dialQUIC(ctx context.Context, addr string) bool {
 	return true
 }
 
-func (c *Checker) probeHTTP(scheme, host, port string) bool {
+func (c *Checker) probeHTTP(ctx context.Context, scheme, host, port string) bool {
 	url := fmt.Sprintf("%s://%s/", scheme, net.JoinHostPort(host, port))
-	resp, err := c.httpClient.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		if c.cfg.Debug {
 			log.Printf("http check %s: %v", url, err)

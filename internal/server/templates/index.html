@@ -29,6 +29,7 @@
 		<div class="info-box">
 			<h3>About</h3>
 			<p>This site tracks the reachability of public peers for the <a href="https://yggdrasil-network.github.io/">Yggdrasil network</a>, an encrypted IPv6 overlay network. Peers are fetched from the <a href="https://github.com/yggdrasil-network/public-peers">public-peers</a> repository and checked every few minutes.</p>
+			<p>Online means at least one eligible probe succeeded. Offline means all eligible probes reported failure. Unknown means evidence is missing, incomplete, or expired; it is not a failure.</p>
 		</div>
 		<div class="info-box">
 			<h3>Tips for choosing peers</h3>
@@ -49,10 +50,10 @@
 		<section>
 			<h2>{{.Name}} <span class="count">({{len .Peers}})</span></h2>
 			{{range .Peers}}
-			<div class="peer {{if .IsUp}}up{{else}}down{{end}}">
+			<div class="peer {{.Status}}">
 				<div class="address-copy"><a class="uri" href="/peer/{{.ID}}" title="{{.URI}}">{{.URI}}</a>{{template "copy-button" .URI}}</div>
-				<span class="status">{{status .}}</span>
-				<span class="uptime">{{uptime .UptimePct}}</span>
+				<span class="status">{{status .}} <small>{{.SuccessfulProbes}}/{{.RegisteredProbes}} probes succeeded · {{.ReportingProbes}}/{{.ExpectedProbes}} eligible reported</small></span>
+				<span class="uptime" title="Known-round coverage: {{optpct .CoveragePct}}">{{uptime .UptimePct}}</span>
 			</div>
 			{{end}}
 		</section>
@@ -63,15 +64,10 @@
 		<section>
 			<h2>{{.Name}} <span class="count">({{len .Peers}})</span></h2>
 			{{range .Peers}}
-			<div class="peer">
+			<div class="peer {{.Status}}">
 				<div class="address-copy"><a class="uri" href="/peer/{{.ID}}" title="{{.URI}}">{{.URI}}</a>{{template "copy-button" .URI}}</div>
-				{{if $.CheckDarknet}}
-				<span class="status">{{status .}}</span>
-				<span class="uptime">{{uptime .UptimePct}}</span>
-				{{else}}
-				<span class="status"></span>
-				<span class="uptime"></span>
-				{{end}}
+				<span class="status">{{status .}} <small>{{.SuccessfulProbes}}/{{.RegisteredProbes}} probes succeeded · {{.ReportingProbes}}/{{.ExpectedProbes}} eligible reported</small></span>
+				<span class="uptime" title="Known-round coverage: {{optpct .CoveragePct}}">{{uptime .UptimePct}}</span>
 			</div>
 			{{end}}
 		</section>

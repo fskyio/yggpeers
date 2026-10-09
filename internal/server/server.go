@@ -16,6 +16,7 @@ import (
 
 	"yggpeers/internal/config"
 	"yggpeers/internal/fetcher"
+	"yggpeers/internal/protocol"
 	"yggpeers/internal/store"
 )
 
@@ -46,6 +47,7 @@ func New(cfg config.Config, s *store.Store) (*Server, error) {
 	}
 	srv := &Server{cfg: cfg, store: s, mux: http.NewServeMux(), tmpls: tmpls}
 	srv.routes()
+	srv.registerProbeRoutes()
 	return srv, nil
 }
 
@@ -89,10 +91,9 @@ type countryGroup struct {
 }
 
 type indexData struct {
-	Countries    []countryGroup
-	Networks     []countryGroup
-	CheckDarknet bool
-	UpdatedAt    time.Time
+	Countries []countryGroup
+	Networks  []countryGroup
+	UpdatedAt time.Time
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
@@ -127,10 +128,9 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := s.tmpls.ExecuteTemplate(w, "index.html", indexData{
-		Countries:    countries,
-		Networks:     networks,
-		CheckDarknet: s.cfg.CheckDarknet,
-		UpdatedAt:    time.Now().UTC(),
+		Countries: countries,
+		Networks:  networks,
+		UpdatedAt: time.Now().UTC(),
 	}); err != nil && !isBrokenPipe(err) {
 		log.Printf("template index: %v", err)
 	}
@@ -166,15 +166,23 @@ func (s *Server) apiPage(w http.ResponseWriter, r *http.Request) {
 // peerRow is the JSON shape for a single peer. It's also used to derive the
 // CSV columns so the two formats stay in sync.
 type peerRow struct {
-	URI            string     `json:"uri"`
-	Country        string     `json:"country"`
-	Protocol       string     `json:"protocol"`
-	Host           string     `json:"host"`
-	Port           int        `json:"port"`
-	IsUp           bool       `json:"is_up"`
-	IsNetwork      bool       `json:"is_network"`
-	StateChangedAt *time.Time `json:"state_changed_at"`
-	UptimePct      *float64   `json:"uptime_pct"`
+	URI              string          `json:"uri"`
+	Country          string          `json:"country"`
+	Protocol         string          `json:"protocol"`
+	Host             string          `json:"host"`
+	Port             int             `json:"port"`
+	Status           protocol.Status `json:"status"`
+	IsNetwork        bool            `json:"is_network"`
+	StateChangedAt   *time.Time      `json:"state_changed_at"`
+	LastCheckedAt    *time.Time      `json:"last_checked_at"`
+	StatusValidUntil *time.Time      `json:"status_valid_until"`
+	LastRoundID      *int64          `json:"last_round_id"`
+	SuccessfulProbes int             `json:"successful_probes"`
+	ReportingProbes  int             `json:"reporting_probes"`
+	ExpectedProbes   int             `json:"expected_probes"`
+	RegisteredProbes int             `json:"registered_probes"`
+	UptimePct        *float64        `json:"uptime_pct"`
+	CoveragePct      *float64        `json:"coverage_pct"`
 }
 
 type peersResponse struct {
@@ -182,6 +190,8 @@ type peersResponse struct {
 	WindowDays int       `json:"window_days"`
 	Total      int       `json:"total"`
 	Online     int       `json:"online"`
+	Offline    int       `json:"offline"`
+	Unknown    int       `json:"unknown"`
 	Peers      []peerRow `json:"peers"`
 }
 
@@ -199,21 +209,32 @@ func toPeerRows(peers []store.PeerWithStats) []peerRow {
 			country = code
 		}
 		out[i] = peerRow{
-			URI:            p.URI,
-			Country:        country,
-			Protocol:       p.Protocol,
-			Host:           p.Host,
-			Port:           port,
-			IsUp:           p.IsUp,
-			IsNetwork:      p.IsNetwork,
-			StateChangedAt: stateChanged,
-			UptimePct:      p.UptimePct,
+			URI:              p.URI,
+			Country:          country,
+			Protocol:         p.Protocol,
+			Host:             p.Host,
+			Port:             port,
+			Status:           p.Status,
+			IsNetwork:        p.IsNetwork,
+			StateChangedAt:   stateChanged,
+			UptimePct:        p.UptimePct,
+			LastCheckedAt:    p.LastCheckedAt,
+			StatusValidUntil: p.StatusValidUntil,
+			LastRoundID:      p.LastRoundID,
+			SuccessfulProbes: p.SuccessfulProbes,
+			ReportingProbes:  p.ReportingProbes,
+			ExpectedProbes:   p.ExpectedProbes,
+			RegisteredProbes: p.RegisteredProbes,
+			CoveragePct:      p.CoveragePct,
 		}
 	}
 	return out
 }
 
 func (s *Server) peersJSON(w http.ResponseWriter, r *http.Request) {
+	if rejectObsoleteStatus(w, r) {
+		return
+	}
 	peers, err := s.store.GetPeersWithStats(store.StatsWindowDays)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -221,17 +242,14 @@ func (s *Server) peersJSON(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows := toPeerRows(peers)
-	online := 0
-	for _, p := range rows {
-		if p.IsUp {
-			online++
-		}
-	}
+	online, offline, unknown := statusCounts(rows)
 	resp := peersResponse{
 		UpdatedAt:  time.Now().UTC(),
 		WindowDays: store.StatsWindowDays,
 		Total:      len(rows),
 		Online:     online,
+		Offline:    offline,
+		Unknown:    unknown,
 		Peers:      rows,
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -241,6 +259,9 @@ func (s *Server) peersJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) peersCSV(w http.ResponseWriter, r *http.Request) {
+	if rejectObsoleteStatus(w, r) {
+		return
+	}
 	peers, err := s.store.GetPeersWithStats(store.StatsWindowDays)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -259,26 +280,61 @@ func (s *Server) peersCSV(w http.ResponseWriter, r *http.Request) {
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{
 		"uri", "country", "protocol", "host", "port",
-		"is_up", "is_network", "state_changed_at", "uptime_pct",
+		"status", "is_network", "state_changed_at", "last_checked_at", "status_valid_until",
+		"last_round_id", "successful_probes", "reporting_probes", "expected_probes", "registered_probes",
+		"uptime_pct", "coverage_pct",
 	})
 	for _, p := range rows {
-		stateChanged := ""
-		if p.StateChangedAt != nil {
-			stateChanged = p.StateChangedAt.Format(time.RFC3339)
-		}
-		uptime := ""
-		if p.UptimePct != nil {
-			uptime = strconv.FormatFloat(*p.UptimePct, 'f', 2, 64)
+		round := ""
+		if p.LastRoundID != nil {
+			round = strconv.FormatInt(*p.LastRoundID, 10)
 		}
 		_ = cw.Write([]string{
 			p.URI, p.Country, p.Protocol, p.Host, strconv.Itoa(p.Port),
-			strconv.FormatBool(p.IsUp),
-			strconv.FormatBool(p.IsNetwork),
-			stateChanged,
-			uptime,
+			string(p.Status), strconv.FormatBool(p.IsNetwork),
+			csvTime(p.StateChangedAt), csvTime(p.LastCheckedAt), csvTime(p.StatusValidUntil),
+			round, strconv.Itoa(p.SuccessfulProbes), strconv.Itoa(p.ReportingProbes),
+			strconv.Itoa(p.ExpectedProbes), strconv.Itoa(p.RegisteredProbes),
+			csvPercent(p.UptimePct), csvPercent(p.CoveragePct),
 		})
 	}
 	cw.Flush()
+}
+
+func csvTime(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func csvPercent(pct *float64) string {
+	if pct == nil {
+		return ""
+	}
+	return strconv.FormatFloat(*pct, 'f', 2, 64)
+}
+
+func statusCounts(rows []peerRow) (online, offline, unknown int) {
+	for _, p := range rows {
+		switch p.Status {
+		case protocol.Up:
+			online++
+		case protocol.Down:
+			offline++
+		default:
+			unknown++
+		}
+	}
+	return
+}
+
+func rejectObsoleteStatus(w http.ResponseWriter, r *http.Request) bool {
+	if r.URL.Query().Has("is_up") {
+		jsonError(w, `is_up is no longer supported: use status=up, status=down, or status=unknown`, http.StatusBadRequest)
+		return true
+	}
+	return false
 }
 
 func (s *Server) countries(w http.ResponseWriter, r *http.Request) {
@@ -300,9 +356,12 @@ func (s *Server) countries(w http.ResponseWriter, r *http.Request) {
 //
 //	country    – case-insensitive exact match on country name or ISO 3166-1 alpha-2 code (e.g., "us" or "US")
 //	protocol   – exact match on protocol (tcp, tls, quic, ws, wss, socks, sockstls)
-//	is_up      – "true" or "false"
+//	status     – "up", "down", or "unknown"
 //	is_network – "true" or "false"
 func (s *Server) apiPeers(w http.ResponseWriter, r *http.Request) {
+	if rejectObsoleteStatus(w, r) {
+		return
+	}
 	peers, err := s.store.GetPeersWithStats(store.StatsWindowDays)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -319,28 +378,28 @@ func (s *Server) apiPeers(w http.ResponseWriter, r *http.Request) {
 			country = strings.ToLower(converted)
 		}
 	}
-	var protocol string
+	var peerProtocol string
 	if v := q.Get("protocol"); v != "" {
-		protocol = strings.ToLower(v)
+		peerProtocol = strings.ToLower(v)
 		validProtocols := map[string]bool{
 			"tcp": true, "tls": true, "quic": true,
 			"ws": true, "wss": true, "socks": true, "sockstls": true,
 		}
-		if !validProtocols[protocol] {
+		if !validProtocols[peerProtocol] {
 			jsonError(w, `invalid protocol: must be one of tcp, tls, quic, ws, wss, socks, sockstls`, http.StatusBadRequest)
 			return
 		}
 	}
 
-	var isUp, isNetwork *bool
-	if v := q.Get("is_up"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			jsonError(w, `invalid is_up: use "true" or "false"`, http.StatusBadRequest)
+	var status protocol.Status
+	if q.Has("status") {
+		status = protocol.Status(q.Get("status"))
+		if !status.Valid() {
+			jsonError(w, `invalid status: use "up", "down", or "unknown"`, http.StatusBadRequest)
 			return
 		}
-		isUp = &b
 	}
+	var isNetwork *bool
 	if v := q.Get("is_network"); v != "" {
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -353,13 +412,13 @@ func (s *Server) apiPeers(w http.ResponseWriter, r *http.Request) {
 	rows := toPeerRows(peers)
 	filtered := rows[:0]
 	for _, p := range rows {
-		if country != "" && strings.ToLower(p.Country) != country {
+		if country != "" && strings.ToLower(p.Country) != country && strings.ToLower(fetcher.IsoToCountryName(p.Country)) != country {
 			continue
 		}
-		if protocol != "" && p.Protocol != protocol {
+		if peerProtocol != "" && p.Protocol != peerProtocol {
 			continue
 		}
-		if isUp != nil && p.IsUp != *isUp {
+		if status != "" && p.Status != status {
 			continue
 		}
 		if isNetwork != nil && p.IsNetwork != *isNetwork {
@@ -368,18 +427,15 @@ func (s *Server) apiPeers(w http.ResponseWriter, r *http.Request) {
 		filtered = append(filtered, p)
 	}
 
-	online := 0
-	for _, p := range filtered {
-		if p.IsUp {
-			online++
-		}
-	}
+	online, offline, unknown := statusCounts(filtered)
 
 	resp := peersResponse{
 		UpdatedAt:  time.Now().UTC(),
 		WindowDays: store.StatsWindowDays,
 		Total:      len(filtered),
 		Online:     online,
+		Offline:    offline,
+		Unknown:    unknown,
 		Peers:      filtered,
 	}
 	w.Header().Set("Content-Type", "application/json")

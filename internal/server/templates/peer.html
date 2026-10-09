@@ -41,8 +41,10 @@
 					{{end}}
 					<dt>{{if .Detail.IsNetwork}}Overlay network{{else}}Listed country{{end}}</dt><dd>{{.Detail.Country}}</dd>
 					<dt>Status</dt><dd class="peer-state {{.Status.Class}}">{{.Status.Label}}</dd>
-					<dt>Last checked</dt><dd>{{if .Detail.LastCheckedAt}}{{.Detail.LastCheckedAt.Format "2006-01-02 15:04:05 UTC"}}{{else}}No timestamp available{{end}}</dd>
-					<dt>7d check success</dt><dd>{{optpct .Detail.UptimePct}}</dd>
+					<dt>Last measured (server)</dt><dd>{{if .Detail.LastCheckedAt}}{{.Detail.LastCheckedAt.Format "2006-01-02 15:04:05 UTC"}}{{else}}No timestamp available{{end}}</dd>
+					<dt>Valid until</dt><dd>{{if .Detail.StatusValidUntil}}{{.Detail.StatusValidUntil.Format "2006-01-02 15:04:05 UTC"}}{{else}}No fresh measurement{{end}}</dd>
+					<dt>7d known-round success</dt><dd>{{optpct .Detail.UptimePct}}</dd>
+					<dt>7d measurement coverage</dt><dd>{{optpct .Detail.CoveragePct}}</dd>
 				</dl>
 			</section>
 			{{if not .Detail.IsNetwork}}
@@ -57,25 +59,48 @@
 			</section>
 			{{end}}
 		</div>
+		<section class="peer-card probe-coverage">
+			<h2>Distributed probe results</h2>
+			{{if .Coverage.RoundID}}
+			<p class="probe-summary"><strong>{{.Coverage.Successful}} of {{.Coverage.Registered}} registered enabled probes succeeded</strong> in measurement round {{.Coverage.RoundID}}.</p>
+			<p class="peer-meta">{{.Coverage.Reported}} of {{.Coverage.Eligible}} eligible probes reported. Round membership is fixed at the start; ineligible probes do not count as failures.</p>
+			<p class="peer-meta">Round started {{.Coverage.StartedAt.Format "2006-01-02 15:04:05 UTC"}} · Deadline {{.Coverage.Deadline.Format "2006-01-02 15:04:05 UTC"}}.</p>
+			{{else}}
+			<p class="peer-message">No measurement round published yet. {{.Coverage.Registered}} registered enabled probes currently available.</p>
+			{{end}}
+			<p class="peer-message">Success from any eligible probe means online. Offline requires failure from every eligible probe. Missing reports are unknown, not failures. Times below are server timestamps.</p>
+			{{if .Coverage.Probes}}
+			<div class="peer-table-scroll"><table class="peer-table probe-table">
+				<thead><tr><th scope="col">Probe</th><th scope="col">Result</th><th scope="col">Report received (UTC)</th><th scope="col">Last check-in (UTC)</th></tr></thead>
+				<tbody>{{range .Coverage.Probes}}<tr data-probe-id="{{.ID}}" class="{{if not .Eligible}}ineligible{{else if eq .Status "up"}}up{{else if eq .Status "down"}}down{{else}}missing{{end}}">
+					<th scope="row">{{.Name}}</th>
+					<td class="peer-state {{if not .Eligible}}unknown{{else if eq .Status "up"}}up{{else if eq .Status "down"}}down{{else}}unknown{{end}}">{{if not .Eligible}}Ineligible{{else if eq .Status "up"}}Successful{{else if eq .Status "down"}}Failed{{else}}Missing report{{end}}</td>
+					<td>{{if .ReportedAt}}{{.ReportedAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td>
+					<td>{{if .LastSeenAt}}{{.LastSeenAt.Format "2006-01-02 15:04:05"}}{{else}}—{{end}}</td>
+				</tr>{{end}}</tbody>
+			</table></div>
+			{{else}}<p class="peer-message">No registered enabled probes in this measurement.</p>{{end}}
+		</section>
 		<section class="peer-card">
 			<h2>Reachability history — 7 days</h2>
-			<div class="history-bar" role="group" aria-label="Hourly probe results, oldest to newest">
-				{{range $i, $hour := .Hours}}<button type="button" class="history-hour {{$hour.Class}}" tabindex="{{if eq $i 0}}0{{else}}-1{{end}}" title="{{$hour.Label}}" aria-label="{{$hour.Label}}" data-detail="{{$hour.Label}}"></button>{{end}}
+			<div class="history-bar" role="group" aria-label="Hourly aggregate measurement rounds, oldest to newest">
+				{{range $i, $hour := .Hours}}<button type="button" class="history-hour {{$hour.Class}}{{if $hour.Unknown}} incomplete{{end}}" tabindex="{{if eq $i 0}}0{{else}}-1{{end}}" title="{{$hour.Label}}" aria-label="{{$hour.Label}}" data-detail="{{$hour.Label}}"></button>{{end}}
 			</div>
 			<div class="history-range"><span>{{.Detail.WindowStart.Format "Jan 02 15:04 UTC"}}</span><span>{{.Detail.WindowEnd.Format "Jan 02 15:04 UTC"}}</span></div>
 			<ul class="history-legend">
-				<li><span class="history-key up"></span>All checks passed</li>
-				<li><span class="history-key down"></span>All checks failed</li>
-				<li><span class="history-key mixed"></span>Mixed results</li>
-				<li><span class="history-key unknown"></span>No observations</li>
+				<li><span class="history-key up"></span>All known rounds succeeded</li>
+				<li><span class="history-key down"></span>All known rounds failed</li>
+				<li><span class="history-key mixed"></span>Mixed known results</li>
+				<li><span class="history-key unknown"></span>Unknown / no observations</li>
+				<li><span class="history-key incomplete"></span>Includes unknown rounds</li>
 			</ul>
 			<p id="history-detail" class="history-detail" aria-live="polite">{{range $i, $hour := .Hours}}{{if eq $i 0}}{{$hour.Label}}{{end}}{{end}}</p>
-			<p class="peer-meta">{{.Detail.UpCount}} / {{.Detail.Checks}} checks passed in the last 168 hours.</p>
+			<p class="peer-meta">{{.Detail.UpCount}} / {{.Detail.Checks}} known rounds succeeded in the last 168 hours; {{.Detail.UnknownCount}} unknown rounds. Legacy observations have no per-probe attribution.</p>
 			<details class="history-table">
-				<summary>Hourly check results</summary>
+				<summary>Hourly measurement results</summary>
 				<div class="peer-table-scroll"><table class="peer-table">
-					<thead><tr><th scope="col">Hour starting (UTC)</th><th scope="col">Passed / checked</th><th scope="col">Result</th></tr></thead>
-					<tbody>{{range .Hours}}<tr><td>{{.Start.Format "2006-01-02 15:04:05"}}</td><td>{{.UpCount}} / {{.Checks}}</td><td>{{if eq .Class "unknown"}}No observations{{else if eq .Class "mixed"}}Mixed{{else if eq .Class "up"}}All passed{{else}}All failed{{end}}</td></tr>{{end}}</tbody>
+					<thead><tr><th scope="col">Hour starting (UTC)</th><th scope="col">Succeeded / known</th><th scope="col">Unknown rounds</th><th scope="col">Result</th></tr></thead>
+					<tbody>{{range .Hours}}<tr><td>{{.Start.Format "2006-01-02 15:04:05"}}</td><td>{{.UpCount}} / {{.Checks}}</td><td>{{.UnknownCount}}</td><td>{{if eq .Class "unknown"}}Unknown / no observations{{else if eq .Class "mixed"}}Mixed known results{{else if eq .Class "up"}}Known rounds succeeded{{else}}Known rounds failed{{end}}{{if .Unknown}} · Incomplete coverage{{end}}</td></tr>{{end}}</tbody>
 				</table></div>
 			</details>
 		</section>

@@ -40,7 +40,7 @@ make map-check
 
 Optional variables: `MAP_URL` (default `http://127.0.0.1:8080`), `MAP_QA_DIR` (default `/tmp/yggpeers-map-qa`), and `CHROMIUM_PATH` (an existing Chromium executable).
 
-The browser check substitutes a fixed country-count fixture, verifies small-place discovery and zooming, Hong Kong/Singapore polygons and hover details, toggling before new tiles load, empty data, mobile layout, and graceful API failure. It asserts that archive requests are partial responses and writes screenshots plus `transfers.json`. Transfer figures count compressed archive response bodies at a 1600×900 viewport, excluding HTTP headers, the country catalog, scripts, and styles. The Hong Kong sample includes intermediate tiles loaded during the zoom animation; later views reuse already fetched archive data.
+The browser check substitutes a fixed country-count fixture with total/online/offline/unknown counters; running probes is not required for these geometry checks. It verifies small-place discovery and zooming, Hong Kong/Singapore polygons and hover details, toggling before new tiles load, empty data, mobile layout, and graceful API failure. Real distributed status should also be exercised with the main instance and multiple standalone probes, including a missing report: unknown is not offline. The check asserts that archive requests are partial responses and writes screenshots plus `transfers.json`. Transfer figures count compressed archive response bodies at a 1600×900 viewport, excluding HTTP headers, the country catalog, scripts, and styles. The Hong Kong sample includes intermediate tiles loaded during the zoom animation; later views reuse already fetched archive data.
 
 Example measured session with the bundled archive (decimal KB):
 

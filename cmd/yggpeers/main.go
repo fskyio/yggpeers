@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
-	"yggpeers/internal/checker"
 	"yggpeers/internal/config"
+	"yggpeers/internal/coordinator"
 	"yggpeers/internal/fetcher"
 	"yggpeers/internal/metadata"
 	"yggpeers/internal/server"
@@ -22,6 +22,15 @@ import (
 
 func main() {
 	cfg := config.New()
+	if len(os.Args) > 1 {
+		if err := manageProbes(cfg, os.Args[1:]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatal(err)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(cfg.DBPath), 0o755); err != nil {
 		log.Fatalf("create data dir: %v", err)
@@ -34,7 +43,6 @@ func main() {
 	defer st.Close()
 
 	f := fetcher.New(st)
-	c := checker.New(cfg, st)
 	enricher := metadata.New(st)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -50,15 +58,7 @@ func main() {
 
 	go func() {
 		defer wg.Done()
-		log.Println("Running uptime checks...")
-		if err := c.CheckAll(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("check: %v", err)
-		}
-		runEvery(ctx, cfg.CheckInterval, func() {
-			if err := c.CheckAll(ctx); err != nil && !errors.Is(err, context.Canceled) {
-				log.Printf("check: %v", err)
-			}
-		})
+		coordinator.Run(ctx, cfg, st)
 	}()
 
 	go func() {

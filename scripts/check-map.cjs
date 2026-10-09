@@ -7,15 +7,15 @@ const { chromium } = require('playwright');
 const baseURL = process.env.MAP_URL || 'http://127.0.0.1:8080';
 const output = process.env.MAP_QA_DIR || '/tmp/yggpeers-map-qa';
 const fixtures = {
-	'Hong Kong': { total: 12, online: 4, avgUptime: 80 },
-	Singapore: { total: 8, online: 3, avgUptime: 95 },
-	Monaco: { total: 3, online: 0, avgUptime: null },
-	Germany: { total: 24, online: 18, avgUptime: 96 },
-	'United States': { total: 30, online: 24, avgUptime: 92 },
-	Russia: { total: 22, online: 10, avgUptime: 78 },
-	Sweden: { total: 4, online: 2, avgUptime: 90 },
-	Australia: { total: 9, online: 6, avgUptime: 88 },
-	Brazil: { total: 3, online: 1, avgUptime: 75 }
+	'Hong Kong': { total: 12, online: 4, offline: 5, unknown: 3, avgUptime: 80 },
+	Singapore: { total: 8, online: 3, offline: 2, unknown: 3, avgUptime: 95 },
+	Monaco: { total: 3, online: 0, offline: 2, unknown: 1, avgUptime: null },
+	Germany: { total: 24, online: 18, offline: 4, unknown: 2, avgUptime: 96 },
+	'United States': { total: 30, online: 24, offline: 5, unknown: 1, avgUptime: 92 },
+	Russia: { total: 22, online: 10, offline: 8, unknown: 4, avgUptime: 78 },
+	Sweden: { total: 4, online: 2, offline: 1, unknown: 1, avgUptime: 90 },
+	Australia: { total: 9, online: 6, offline: 2, unknown: 1, avgUptime: 88 },
+	Brazil: { total: 3, online: 1, offline: 1, unknown: 1, avgUptime: 75 }
 };
 
 async function run() {
@@ -99,6 +99,7 @@ async function run() {
 		await page.mouse.move(sg.x, sg.y);
 		await page.locator('.maplibregl-popup-content').filter({ hasText: 'Singapore' }).waitFor();
 		assert.match(await page.locator('.maplibregl-popup-content').textContent(), /8 total peers.*3 online/);
+		assert.match(await page.locator('.maplibregl-popup-content').textContent(), /2 offline, 3 unknown/);
 		const state = await page.evaluate(() => window.__peerMap.getFeatureState({ source: 'countries', sourceLayer: 'countries', id: 'SG' }));
 		assert.equal(state.online, 3, 'peer state must apply to tiles loaded after toggling');
 		await snapshot('singapore');

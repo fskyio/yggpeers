@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"yggpeers/internal/endpoint"
+	"yggpeers/internal/protocol"
 	"yggpeers/internal/store"
 )
 
@@ -21,6 +22,7 @@ type peerStatus struct {
 }
 
 type historyCell struct {
+	Unknown bool
 	store.HistoryHour
 	Class string
 	Label string
@@ -45,6 +47,7 @@ type peerPageData struct {
 	Destination         endpoint.Destination
 	DestinationError    bool
 	Status              peerStatus
+	Coverage            store.ProbeCoverage
 	Hours               []historyCell
 	Resolution          store.HostMetadata
 	ResolutionAvailable bool
@@ -55,24 +58,21 @@ type peerPageData struct {
 	UpdatedAt           time.Time
 }
 
-func observedStatus(p store.Peer, checkInterval time.Duration, checkDarknet bool, now time.Time) peerStatus {
-	if p.IsNetwork && !checkDarknet {
-		return peerStatus{"Not monitored", "unknown"}
+func observedStatus(p store.Peer, now time.Time) peerStatus {
+	if p.StatusValidUntil == nil || !now.Before(*p.StatusValidUntil) {
+		if p.LastCheckedAt != nil {
+			return peerStatus{"Unknown — measurement expired", "unknown"}
+		}
+		return peerStatus{"Unknown — no fresh measurement", "unknown"}
 	}
-	if p.LastCheckedAt == nil {
-		return peerStatus{"Unobserved", "unknown"}
+	switch p.Status {
+	case protocol.Up:
+		return peerStatus{"Online", "up"}
+	case protocol.Down:
+		return peerStatus{"Offline", "down"}
+	default:
+		return peerStatus{"Unknown — insufficient probe reports", "unknown"}
 	}
-	state, class := "Offline", "down"
-	if p.IsUp {
-		state, class = "Online", "up"
-	}
-	if checkInterval <= 0 {
-		checkInterval = 5 * time.Minute
-	}
-	if now.Sub(*p.LastCheckedAt) > 3*checkInterval {
-		return peerStatus{"Stale — last observed " + state, "unknown"}
-	}
-	return peerStatus{state, class}
 }
 
 func historyCells(hours []store.HistoryHour) []historyCell {
@@ -89,10 +89,17 @@ func historyCells(hours []store.HistoryHour) []historyCell {
 				class, description = "mixed", "Mixed results"
 			}
 		}
-		label := fmt.Sprintf("%s – %s UTC: %s; %d/%d checks passed",
+		if hour.UnknownCount > 0 {
+			if hour.Checks == 0 {
+				description = "Unknown measurements"
+			} else {
+				description += "; incomplete coverage"
+			}
+		}
+		label := fmt.Sprintf("%s – %s UTC: %s; %d/%d known rounds succeeded; %d unknown rounds",
 			hour.Start.Format("2006-01-02 15:04:05"), hour.End.Format("2006-01-02 15:04:05"),
-			description, hour.UpCount, hour.Checks)
-		cells[i] = historyCell{HistoryHour: hour, Class: class, Label: label}
+			description, hour.UpCount, hour.Checks, hour.UnknownCount)
+		cells[i] = historyCell{HistoryHour: hour, Class: class, Label: label, Unknown: hour.UnknownCount > 0}
 	}
 	return cells
 }
@@ -174,8 +181,14 @@ func (s *Server) peerPage(w http.ResponseWriter, r *http.Request) {
 		log.Printf("GetPeerDetail: %v", err)
 		return
 	}
+	coverage, err := s.store.GetPeerProbeCoverage(id)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		log.Printf("GetPeerProbeCoverage: %v", err)
+		return
+	}
 	data := peerPageData{
-		Detail: detail, Status: observedStatus(detail.Peer, s.cfg.CheckInterval, s.cfg.CheckDarknet, now),
+		Detail: detail, Status: observedStatus(detail.Peer, now), Coverage: coverage,
 		Hours: historyCells(detail.Hours), UpdatedAt: now,
 	}
 	destination, err := endpoint.Parse(detail.URI)
@@ -218,7 +231,7 @@ func (s *Server) peerPage(w http.ResponseWriter, r *http.Request) {
 		}
 		data.Related = matchingPeers(detail.Peer, destination, peers, hosts, now)
 		for i := range data.Related {
-			data.Related[i].Status = observedStatus(data.Related[i].Peer.Peer, s.cfg.CheckInterval, s.cfg.CheckDarknet, now)
+			data.Related[i].Status = observedStatus(data.Related[i].Peer.Peer, now)
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

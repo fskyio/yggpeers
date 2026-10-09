@@ -140,14 +140,15 @@
 					var weight = previous.total + info.total;
 					var uptime = previous.avgUptime === null || info.avgUptime === null ? null :
 						(previous.avgUptime * previous.total + info.avgUptime * info.total) / weight;
-					info = { total: weight, online: previous.online + info.online, avgUptime: uptime };
+					info = { total: weight, online: previous.online + info.online,
+						offline: previous.offline + info.offline, unknown: previous.unknown + info.unknown, avgUptime: uptime };
 				}
 				countsByCode[code] = info;
 			});
 			var markers = [];
 			Object.keys(countries).forEach(function(code) {
 				var country = countries[code];
-				var info = countsByCode[code] || { total: 0, online: 0, avgUptime: null };
+				var info = countsByCode[code] || { total: 0, online: 0, offline: 0, unknown: 0, avgUptime: null };
 				// Feature state survives loading new tiles and is independent of the archive.
 				map.setFeatureState({ source: 'countries', sourceLayer: 'countries', id: code }, info);
 				if (country.marker && info.total > 0) {
@@ -175,7 +176,7 @@
 			function showCountry(feature, lngLat) {
 				var code = feature.properties.code;
 				var country = countries[code];
-				var info = countsByCode[code] || { total: 0, online: 0, avgUptime: null };
+				var info = countsByCode[code] || { total: 0, online: 0, offline: 0, unknown: 0, avgUptime: null };
 				var content = document.createElement('div');
 				var title = document.createElement('strong');
 				title.textContent = country ? country.name : feature.properties.name;
@@ -187,6 +188,7 @@
 				if (info.total > 0) {
 					line(info.total + ' total peer' + (info.total !== 1 ? 's' : ''));
 					line(info.online + ' online, ' + Math.round(info.online / info.total * 100) + '% online');
+					line(info.offline + ' offline, ' + info.unknown + ' unknown');
 					if (info.avgUptime !== null) line(Number(info.avgUptime).toFixed(1) + '% avg. uptime');
 				} else {
 					line('No peers');

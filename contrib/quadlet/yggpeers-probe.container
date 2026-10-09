@@ -1,0 +1,12 @@
+[Container]
+ContainerName=yggpeers-probe
+DropCapability=ALL
+EnvironmentFile=.env.probe
+Image=gitfield.org/fsky/yggpeers-probe:latest
+NoNewPrivileges=true
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target default.target

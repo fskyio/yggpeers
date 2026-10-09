@@ -3,6 +3,7 @@ AutoUpdate=registry
 ContainerName=yggpeers
 DropCapability=ALL
 EnvironmentFile=.env
+Environment=DB_PATH=/data/yggpeers.db
 Image=gitfield.org/fsky/yggpeers:latest
 NoNewPrivileges=true
 PublishPort=8080:8080

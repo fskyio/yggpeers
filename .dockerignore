@@ -2,3 +2,8 @@ data/
 *.db
 yggpeers
 .git
+build/
+yggpeers-probe
+.env
+.env.*
+*.token

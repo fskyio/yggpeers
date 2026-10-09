@@ -167,6 +167,9 @@ section h2 .count {
 	color: var(--offline);
 }
 
+.peer.unknown .status, .peer.unknown .uptime { color: var(--muted); }
+.peer .status small { display: block; font-size: 0.7rem; font-weight: normal; color: var(--muted); }
+
 .site-footer {
 	border-top: 1px solid var(--border);
 }
@@ -748,6 +751,7 @@ main.map-page {
 .history-hour.down, .history-key.down { background: var(--history-down); }
 .history-hour.mixed, .history-key.mixed { background: var(--history-mixed); }
 .history-hour.unknown, .history-key.unknown { background: var(--history-unknown); }
+.history-hour.incomplete, .history-key.incomplete { background-image: repeating-linear-gradient(135deg, transparent 0 3px, var(--history-unknown) 3px 5px); }
 .history-range { display: flex; justify-content: space-between; gap: 1rem; font-size: 0.75rem; color: var(--muted); margin-top: 0.4rem; }
 .history-legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; list-style: none; margin-top: 0.75rem; font-size: 0.8rem; }
 .history-legend li { display: flex; align-items: center; gap: 0.35rem; }
@@ -760,6 +764,10 @@ main.map-page {
 .peer-table th, .peer-table td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
 .peer-table th { color: var(--muted); }
 .network-table td { overflow-wrap: anywhere; }
+.probe-table { min-width: 40rem; }
+.probe-table th[scope="row"] { min-width: 10rem; max-width: 16rem; overflow-wrap: anywhere; }
+.probe-table td:nth-child(n+3) { white-space: nowrap; }
+.probe-summary { font-size: 0.9rem; }
 .network-table .address-copy { width: max-content; }
 .network-table .address-copy > code { flex-shrink: 0; max-width: 15ch; }
 .asn { white-space: nowrap; }
